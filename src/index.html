@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>retifs</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>retifs</h1>
+    <span id="state" class="pill">connecting…</span>
+  </header>
+  <nav>
+    <button data-view="overview" class="active">Overview</button>
+    <button data-view="namespaces">Namespaces</button>
+  </nav>
+  <main>
+    <section id="overview">
+      <div id="node" class="muted"></div>
+      <h2>Storage</h2>
+      <div id="usage"></div>
+      <p id="error" class="error"></p>
+    </section>
+    <section id="namespaces" hidden>
+      <table>
+        <thead><tr><th>Namespace</th><th>Records</th><th>Writers</th><th>Peers</th><th>Keeps</th><th>Checkpoint</th></tr></thead>
+        <tbody id="ns-rows"></tbody>
+      </table>
+      <p id="ns-empty" class="muted" hidden>No namespaces yet.</p>
+    </section>
+  </main>
+  <script src="main.js"></script>
+</body>
+</html>
