@@ -4,7 +4,7 @@ A desktop management utility for retifs, in the spirit of the Nextcloud desktop 
 
 ## Principles
 - **A client of the daemon, nothing more.** All state lives in `retifsd`; the utility talks to it only through `libretifs` (the owner's socket, or `--via` an own node). It holds no data and no keys of its own, so it can be closed, crash or be replaced without consequence.
-- **Records, not folders.** It shows namespaces, records and queries. The file tree is the mount's job; the utility only switches the mount on and off.
+- **Manages retifs, doesn't catalogue content** (the user's rule, 2026-10-21). It shows this node, storage, namespaces as units (members, sharing, what's kept where, redundancy) and devices. Browsing, searching and viewing records is what apps are for (a photo album, a music player…), and the file tree is the mount's job; the utility only switches the mount on and off.
 - **Say what's true.** "Only here", "2 copies", "waiting for the grant", "the content isn't reachable": the daemon's real states, not a green tick.
 - **No new protocol.** Where the local API lacks something the utility needs, it's added to retifs as a request (listed below), not worked around here.
 
@@ -28,13 +28,12 @@ Native widgets on each platform (the user's choice, 2026-10-21: no webview), ove
 | **Tray** | daemon up or down; peers reachable; data still "only here"; errors; a menu to open the window, pause, quit | `Ping`; health summary missing (below) |
 | **Overview** | this node (address, device name), storage use (own, held for others, cache, reserve, volume), redundancy at a glance | `Ping` (usage) |
 | **Namespaces** | each namespace: records, writers and rights, peers, checkpoint, keep mode, lazy or full | `Namespaces`, `NsInfo` |
-| **Namespace detail** | records (a query box), a record's attributes, blocks and history; members with grant and revoke | `Query`, `RecordGet`, `RecordHistory`, `NsGrant`, `NsRevoke` |
+| **Namespace** | its address to share, members and their rights (grant, revoke), what this device keeps, peers, record count, checkpoint | `NsInfo`, `NsGrant`, `NsRevoke` |
 | **Sharing** | share read-only as a QR code or link; invite to write (one-use invitation, ADR-0020); followed channels | `NsAddress`, `Follow`, `Channels`; invitations missing |
 | **This device keeps** | keep mode and rules per device ("keep album Prangli here"): the counterpart of selective sync | `NsKeep`, keep-rule records |
 | **Redundancy** | per namespace: copies and holders, what's only here, repairs in progress | `Status` per file; namespace summary missing |
 | **Devices and apps** | own nodes admitted for `--via`, app tokens, adding and removing them | `AppList`, `AppAdd`, `AppRemove` |
-| **Search** | one search box: local, through an own node, through a search node | `Query`, `SearchQuery`, `--via` |
-| **Activity** | recent changes per namespace, who made them, from which device | `Watch` wakes it; a change list is missing |
+| **Activity** | sync activity: which namespaces changed, from which member and device, how many records (not what's in them) | `Watch` wakes it; a change list is missing |
 | **Settings** | mount on/off and where; gateway on/off; disk budget; start at login | systemd units; budget flags only on the command line today |
 
 ## Needed in retifs (local API)
@@ -48,16 +47,14 @@ Native widgets on each platform (the user's choice, 2026-10-21: no webview), ove
 ## Milestones
 Each one is usable on its own.
 1. **Skeleton:** connects to `retifsd`; overview with the node, storage use and namespaces; a banner while it isn't running (GTK done; the tray icon comes with milestone 6).
-2. **Namespaces:** records with a search box, a record's attributes, content and history (GTK done).
+2. **Namespaces:** each namespace's management page: address to share, members and rights, what this device keeps, peers, checkpoint (GTK done).
 3. **Sharing, read-only:** QR code and link for a namespace (`retifs:ns/…?q=…`), follow from a pasted link.
 4. **Keeping:** keep mode and rules per device; mount and gateway switches.
 5. **Devices and apps:** own nodes and app tokens.
 6. **Health and redundancy:** after retifs gains the summary requests (1, 3).
 7. **Activity:** after the change list (2).
 8. **Invitations:** after ADR-0020 is implemented (4).
-9. **Search:** local, `--via`, search node.
-10. **Packaging:** AppImage/.deb (Linux), MSI (Windows), start at login.
+9. **Packaging:** AppImage/.deb (Linux), MSI (Windows), start at login.
 
 ## Open
-- How the window shows records of very different kinds (photos, contacts, notes) before the media conventions exist: a generic attribute table first, type-specific views later.
 - Whether the utility also manages a node over `--via` (a headless home server from the laptop).
