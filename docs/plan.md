@@ -9,15 +9,17 @@ A desktop management utility for retifs, in the spirit of the Nextcloud desktop 
 - **No new protocol.** Where the local API lacks something the utility needs, it's added to retifs as a request (listed below), not worked around here.
 
 ## Architecture
+Native widgets on each platform (the user's choice, 2026-10-21: no webview), over one shared core, the same pattern as retifs' own frontends (FUSE on Linux, userlandfs on Haiku):
 ```
- tray + window (web UI in the system webview: HTML/CSS/TypeScript)
-          │  Tauri commands and events
- Rust side (Tauri) ── libretifs ── retifs.sock ── retifsd
-          │
-          └── starts/stops retifs-mount and retifs-gateway (systemd user units on Linux, processes on Windows)
+ gtk/      GTK 4 + libadwaita (Linux)        ─┐
+ windows/  native Windows controls (later)    ├── core/ (Rust) ── libretifs ── retifs.sock ── retifsd
+ haiku/    BeAPI (later)                     ─┘
 ```
-- The Rust side holds one `libretifs::Client`, reconnects when the daemon restarts, and turns `Watch` long polls into UI events.
-- The UI framework is open: plain TypeScript to start, Svelte if views grow.
+- **core/** wraps `libretifs` with a small tokio runtime and offers blocking calls (status, namespaces, search, history) and shared logic (search terms, what changed between versions, sizes). A front end runs them on a worker thread and shows the results on its UI thread.
+- **gtk/** is the Linux app: an `AdwNavigationSplitView` with a sidebar (overview, namespaces), preference groups for the overview, a banner while the daemon isn't running, the node in the window subtitle.
+- **Windows:** native controls; Win32 from Rust (`windows-rs`) or a WinUI app over a C interface to the core, decided when it starts.
+- **Haiku:** a BeAPI app; Tracker already shows attributes.
+- The tray: StatusNotifierItem on Linux (KDE natively, GNOME with the AppIndicator extension), the notification area on Windows.
 - `libretifs` comes from the retifs repo (a path or git dependency).
 
 ## Views
@@ -45,8 +47,8 @@ A desktop management utility for retifs, in the spirit of the Nextcloud desktop 
 
 ## Milestones
 Each one is usable on its own.
-1. **Skeleton:** Tauri app, connects to `retifsd`, tray icon up/down, Overview with storage use. Linux and Windows builds.
-2. **Namespaces:** list and detail, records with a query box, a record's history.
+1. **Skeleton:** connects to `retifsd`; overview with the node, storage use and namespaces; a banner while it isn't running (GTK done; the tray icon comes with milestone 6).
+2. **Namespaces:** records with a search box, a record's attributes, content and history (GTK done).
 3. **Sharing, read-only:** QR code and link for a namespace (`retifs:ns/…?q=…`), follow from a pasted link.
 4. **Keeping:** keep mode and rules per device; mount and gateway switches.
 5. **Devices and apps:** own nodes and app tokens.
@@ -57,6 +59,5 @@ Each one is usable on its own.
 10. **Packaging:** AppImage/.deb (Linux), MSI (Windows), start at login.
 
 ## Open
-- UI framework: plain TypeScript or Svelte.
 - How the window shows records of very different kinds (photos, contacts, notes) before the media conventions exist: a generic attribute table first, type-specific views later.
 - Whether the utility also manages a node over `--via` (a headless home server from the laptop).

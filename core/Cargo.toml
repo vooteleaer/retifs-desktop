@@ -1,0 +1,11 @@
+[package]
+name = "retifs-desktop-core"
+description = "What every retifs-desktop front end shares: talking to retifsd through libretifs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+libretifs = { path = "../../retifs/crates/libretifs" }
+tokio = { version = "1", features = ["rt"] }
