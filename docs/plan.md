@@ -30,6 +30,7 @@ Native widgets on each platform (the user's choice, 2026-10-21: no webview), ove
 | **Namespaces** | each namespace: records, writers and rights, peers, checkpoint, keep mode, lazy or full | `Namespaces`, `NsInfo` |
 | **Namespace** | its address to share, members and their rights (grant, revoke), what this device keeps, peers, record count, checkpoint | `NsInfo`, `NsGrant`, `NsRevoke` |
 | **Sharing** | share read-only as a QR code or link; invite to write (one-use invitation, ADR-0020); followed channels | `NsAddress`, `Follow`, `Channels`; invitations missing |
+| **Shares** | every share as its own row (name, what it's made of: records, a folder or a query; source namespace; members; read or write; expiry); a **+** button opens the share dialog; opening one shows its members (add, remove), its link and QR code again, pending invitations; **delete** ends it (updates stop, members' access is revoked by key rotation, the share namespace is removed; the source's records are untouched) | share requests (below) |
 | **This device keeps** | keep mode and rules per device ("keep album Prangli here"): the counterpart of selective sync | `NsKeep`, keep-rule records |
 | **Redundancy** | per namespace: copies and holders, what's only here, repairs in progress | `Status` per file; namespace summary missing |
 | **Devices and apps** | own nodes admitted for `--via`, app tokens, adding and removing them | `AppList`, `AppAdd`, `AppRemove` |
@@ -58,7 +59,7 @@ Each one is usable on its own.
 5. **Devices and apps:** own nodes and app tokens.
 6. **Health and redundancy:** after retifs gains the summary requests (1, 3).
 7. **Activity:** after the change list (2).
-8. **Invitations and shares:** the share dialog, after ADR-0020 and ADR-0021 are implemented (4, 5).
+8. **Invitations and shares:** the Shares page (a list, + to add, delete) and the share dialog, after ADR-0020 and ADR-0021 are implemented (4, 5).
 9. **Mounts and the context menu:** the file tree on/off per namespace; Share with retifs… in Nautilus/Dolphin, and in Explorer with the Cloud Files provider.
 10. **Packaging:** AppImage/.deb (Linux), MSI (Windows), start at login.
 
