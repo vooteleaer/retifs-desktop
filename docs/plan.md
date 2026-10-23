@@ -9,6 +9,9 @@ A desktop management utility for retifs, in the spirit of the Nextcloud desktop 
 - **Say what's true.** "Only here", "2 copies", "waiting for the grant", "the content isn't reachable": the daemon's real states, not a green tick.
 - **No new protocol.** Where the local API lacks something the utility needs, it's added to retifs as a request (listed below), not worked around here.
 
+## Words
+- **Club** (the user's word, 2026-10-23) for a namespace with several members: "Family club", "the Prangli club". A namespace of one is just a library; a share is a club filled by a selection. The interface says club, members, invite, never namespace, writer key or grant.
+
 ## Architecture
 Native widgets on each platform (the user's choice, 2026-10-21: no webview), over one shared core, the same pattern as retifs' own frontends (FUSE on Linux, userlandfs on Haiku):
 ```
