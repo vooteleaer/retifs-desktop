@@ -58,7 +58,7 @@ impl Find {
 
         let scope_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         scope_row.append(&gtk::Label::new(Some("Look in")));
-        let scope = gtk::DropDown::from_strings(&["All namespaces"]);
+        let scope = gtk::DropDown::from_strings(&["Everywhere"]);
         scope_row.append(&scope);
         let scope_note = gtk::Label::new(None);
         scope_note.add_css_class("dim-label");
@@ -144,7 +144,7 @@ impl Find {
             return;
         }
         let selected = self.selected_namespace();
-        let mut items = vec!["All namespaces".to_string()];
+        let mut items = vec!["Everywhere".to_string()];
         items.extend(names.iter().cloned());
         let refs: Vec<&str> = items.iter().map(String::as_str).collect();
         self.scope.set_model(Some(&gtk::StringList::new(&refs)));
@@ -313,7 +313,7 @@ impl Find {
         let entry = gtk::Entry::builder().placeholder_text("Name").activates_default(true).build();
         let dialog = adw::MessageDialog::builder()
             .heading("Save this search")
-            .body("Saved searches are kept in your namespace me, so all your devices have them.")
+            .body("Saved searches are kept with your own data, so all your devices have them.")
             .extra_child(&entry)
             .default_response("save")
             .close_response("cancel")
