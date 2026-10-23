@@ -10,7 +10,8 @@ A desktop management utility for retifs, in the spirit of the Nextcloud desktop 
 - **No new protocol.** Where the local API lacks something the utility needs, it's added to retifs as a request (listed below), not worked around here.
 
 ## Words
-- **Club** (the user's word, 2026-10-23) for a namespace with several members: "Family club", "the Prangli club". A namespace of one is just a library; a share is a club filled by a selection. The interface says club, members, invite, never namespace, writer key or grant.
+- **Library** (the user's word, 2026-10-23) for every namespace: "New library", "Join library" (an invitation or link). Shared ones are marked as such.
+- **Club** (the user's word, 2026-10-23) for the people a library is shared with: "Family club", "the Prangli club". A share is a library filled by a selection. The interface says library, club, members, invite; never namespace, writer key or grant.
 
 ## Architecture
 Native widgets on each platform (the user's choice, 2026-10-21: no webview), over one shared core, the same pattern as retifs' own frontends (FUSE on Linux, userlandfs on Haiku):

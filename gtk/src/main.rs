@@ -1,5 +1,5 @@
 //! retifs-desktop for Linux: native GTK 4 / libadwaita widgets over the
-//! shared core. A sidebar (overview, Find, saved searches, library, clubs), the
+//! shared core. A sidebar (overview, Find, saved searches, libraries), the
 //! overview, Find (a live query, as BeOS's Find), a namespace's management
 //! page (sharing, members, what this device keeps, state), and a banner when
 //! the daemon isn't running. It finds, but doesn't browse or catalogue
@@ -96,31 +96,27 @@ fn build(app: &adw::Application) {
     saved_head.add_css_class("caption-heading");
     let side_saved = gtk::ListBox::new();
     side_saved.add_css_class("navigation-sidebar");
-    // The interface's words (docs/plan.md): a namespace of the user's own
-    // is their library; one with other members is a club.
-    let ns_head = gtk::Label::builder().label("Library").xalign(0.0).hexpand(true).build();
+    // The interface's words (docs/plan.md): every namespace is a library;
+    // one shared with others is marked: they're its club.
+    let ns_head = gtk::Label::builder().label("Libraries").xalign(0.0).hexpand(true).build();
     ns_head.add_css_class("dim-label");
     ns_head.add_css_class("caption-heading");
     let new_library = gtk::Button::builder().label("New library…").build();
-    let join_club = gtk::Button::builder().label("Join club…").build();
+    let join_library = gtk::Button::builder().label("Join library…").build();
     let add_menu = gtk::Box::new(gtk::Orientation::Vertical, 2);
-    for b in [&new_library, &join_club] {
+    for b in [&new_library, &join_library] {
         b.add_css_class("flat");
         b.child().and_downcast::<gtk::Label>().map(|l| l.set_xalign(0.0));
         add_menu.append(b);
     }
     let add_popover = gtk::Popover::builder().child(&add_menu).build();
-    let add_ns = gtk::MenuButton::builder().icon_name("list-add-symbolic").popover(&add_popover).tooltip_text("New library, or join a club").build();
+    let add_ns = gtk::MenuButton::builder().icon_name("list-add-symbolic").popover(&add_popover).tooltip_text("New library, or join one").build();
     add_ns.add_css_class("flat");
     let side_head = gtk::Box::builder().margin_start(18).margin_end(6).margin_top(6).build();
     side_head.append(&ns_head);
     side_head.append(&add_ns);
     let side_ns = gtk::ListBox::new();
     side_ns.add_css_class("navigation-sidebar");
-    side_ns.set_header_func(|row, before| {
-        let starts_clubs = row.has_css_class("club") && !before.is_some_and(|b| b.has_css_class("club"));
-        row.set_header(starts_clubs.then(|| section_label("Clubs")).as_ref());
-    });
     let side_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
     side_box.append(&side_top);
     side_box.append(&saved_head);
@@ -192,7 +188,7 @@ fn build(app: &adw::Application) {
             ask_add_namespace(&me2, b.root().and_downcast(), false);
         });
         let pop = add_popover.clone();
-        join_club.connect_clicked(move |b| {
+        join_library.connect_clicked(move |b| {
             pop.popdown();
             ask_add_namespace(&me, b.root().and_downcast(), true);
         });
@@ -270,7 +266,7 @@ fn overview_widgets() -> Overview {
             (row, bar)
         })
         .collect();
-    let namespaces = adw::PreferencesGroup::builder().title("Library and clubs").build();
+    let namespaces = adw::PreferencesGroup::builder().title("Libraries").build();
     Overview { node, storage, namespaces, ns_rows: RefCell::new(Vec::new()) }
 }
 
@@ -345,7 +341,7 @@ fn show_saved(me: &Rc<App>, saved: Vec<(SavedQuery, Vec<String>, usize)>) {
 }
 
 /// A new library (a namespace of the user's: just a name), or `join`: a
-/// club from an invitation or link (as `retifs open`).
+/// library from an invitation or link (as `retifs open`).
 fn ask_add_namespace(me: &Rc<App>, window: Option<gtk::Window>, join: bool) {
     let name = gtk::Entry::builder().placeholder_text("Name").activates_default(true).build();
     let link = gtk::Entry::builder().placeholder_text("Invitation or link").activates_default(true).visible(join).build();
@@ -360,9 +356,9 @@ fn ask_add_namespace(me: &Rc<App>, window: Option<gtk::Window>, join: bool) {
     fields.append(&link);
     fields.append(&name);
     let (heading, body, ok) = if join {
-        ("Join club", "Paste the invitation or link a member gave you. The name is how it's called here; the invitation suggests one.", "Join")
+        ("Join library", "Paste the invitation or link a member gave you. The name is how it's called here; the invitation suggests one.", "Join")
     } else {
-        ("New library", "A place of your own for photos, notes, anything. Invite others to it and it becomes a club.", "Create")
+        ("New library", "A place for photos, notes, anything. Invite others to it and they become its club.", "Create")
     };
     let dialog = adw::MessageDialog::builder().heading(heading).body(body).extra_child(&fields).default_response("add").close_response("cancel").build();
     dialog.add_responses(&[("cancel", "Cancel"), ("add", ok)]);
@@ -411,13 +407,6 @@ fn is_club(ns: &NsView) -> bool {
     ns.writers.len() > 1 || ns.address.split(':').nth(2) != Some(ns.own_writer.as_str())
 }
 
-fn section_label(text: &str) -> gtk::Label {
-    let l = gtk::Label::builder().label(text).xalign(0.0).margin_start(18).margin_top(12).margin_bottom(4).build();
-    l.add_css_class("dim-label");
-    l.add_css_class("caption-heading");
-    l
-}
-
 fn keeps(ns: &NsView) -> String {
     let mode = if ns.keep == "rules" { "by rules" } else { "everything" };
     if ns.lazy { format!("Keeps {mode}, lazily") } else { format!("Keeps {mode}") }
@@ -430,10 +419,7 @@ fn show_namespaces(me: &Rc<App>, list: &[NsView]) {
     }
     let selected = me.side_ns.selected_row().map(|r| r.widget_name().to_string());
     me.side_ns.remove_all();
-    // The library first, then the clubs.
-    let mut list: Vec<&NsView> = list.iter().collect();
-    list.sort_by_key(|ns| is_club(ns));
-    for ns in list.iter().copied() {
+    for ns in list {
         let row = adw::ActionRow::builder()
             .title(&ns.name)
             .subtitle(format!("{} members · {} peers · {}", ns.writers.len(), ns.peers, keeps(ns).to_lowercase()))
@@ -445,11 +431,18 @@ fn show_namespaces(me: &Rc<App>, list: &[NsView]) {
         o.namespaces.add(&row);
         o.ns_rows.borrow_mut().push(row);
 
-        let item = gtk::ListBoxRow::builder().child(&label(&ns.name)).build();
-        item.set_widget_name(&format!("ns:{}", ns.name));
+        let line = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        let name = label(&ns.name);
+        name.set_hexpand(true);
+        line.append(&name);
         if is_club(ns) {
-            item.add_css_class("club");
+            let mark = gtk::Image::from_icon_name("system-users-symbolic");
+            mark.add_css_class("dim-label");
+            mark.set_tooltip_text(Some(&format!("Shared: a club of {}", ns.writers.len().max(2))));
+            line.append(&mark);
         }
+        let item = gtk::ListBoxRow::builder().child(&line).build();
+        item.set_widget_name(&format!("ns:{}", ns.name));
         me.side_ns.append(&item);
         if selected.as_deref() == Some(item.widget_name().as_str()) {
             me.side_ns.select_row(Some(&item));
