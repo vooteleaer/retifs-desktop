@@ -1,14 +1,17 @@
 //! retifs-desktop for Linux: native GTK 4 / libadwaita widgets over the
-//! shared core. A sidebar (overview, namespaces), the overview, a
-//! namespace's management page (sharing, members, what this device keeps,
-//! state), and a banner when the daemon isn't running. It doesn't browse
+//! shared core. A sidebar (overview, Find, saved searches, namespaces), the
+//! overview, Find (a live query, as BeOS's Find), a namespace's management
+//! page (sharing, members, what this device keeps, state), and a banner when
+//! the daemon isn't running. It finds, but doesn't browse or catalogue
 //! content: that's what apps such as a photo album are for.
+
+mod find;
 
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 use adw::prelude::*;
 use gtk::{gio, glib};
-use retifs_desktop_core::{human, Daemon, NsView, Status};
+use retifs_desktop_core::{human, Daemon, NsView, SavedQuery, Status};
 
 const APP_ID: &str = "org.retifs.Desktop";
 
@@ -44,7 +47,10 @@ struct App {
     overview: Overview,
     ns_page: adw::Bin,
     side_top: gtk::ListBox,
+    side_saved: gtk::ListBox,
     side_ns: gtk::ListBox,
+    find: Rc<find::Find>,
+    saved: RefCell<Vec<(SavedQuery, Vec<String>, usize)>>,
     views: RefCell<Vec<NsView>>,
     shown: RefCell<Option<String>>,
 }
@@ -71,6 +77,9 @@ fn build(app: &adw::Application) {
     stack.add_named(&ov_page, Some("overview"));
     let ns_page = adw::Bin::new();
     stack.add_named(&ns_page, Some("namespace"));
+    let daemon = Arc::new(Daemon::new());
+    let finder = find::Find::new(daemon.clone());
+    stack.add_named(&finder.page, Some("find"));
 
     let content = adw::ToolbarView::new();
     content.add_top_bar(&header);
@@ -81,13 +90,27 @@ fn build(app: &adw::Application) {
     let side_top = gtk::ListBox::new();
     side_top.add_css_class("navigation-sidebar");
     side_top.append(&label("Overview"));
-    let side_head = gtk::Label::builder().label("Namespaces").xalign(0.0).margin_start(18).margin_top(12).margin_bottom(4).build();
-    side_head.add_css_class("dim-label");
-    side_head.add_css_class("caption-heading");
+    side_top.append(&label("Find"));
+    let saved_head = gtk::Label::builder().label("Saved searches").xalign(0.0).margin_start(18).margin_top(12).margin_bottom(4).build();
+    saved_head.add_css_class("dim-label");
+    saved_head.add_css_class("caption-heading");
+    let side_saved = gtk::ListBox::new();
+    side_saved.add_css_class("navigation-sidebar");
+    let ns_head = gtk::Label::builder().label("Namespaces").xalign(0.0).hexpand(true).build();
+    ns_head.add_css_class("dim-label");
+    ns_head.add_css_class("caption-heading");
+    let add_ns = gtk::Button::from_icon_name("list-add-symbolic");
+    add_ns.add_css_class("flat");
+    add_ns.set_tooltip_text(Some("Add a namespace: a new one, or join one from a link"));
+    let side_head = gtk::Box::builder().margin_start(18).margin_end(6).margin_top(6).build();
+    side_head.append(&ns_head);
+    side_head.append(&add_ns);
     let side_ns = gtk::ListBox::new();
     side_ns.add_css_class("navigation-sidebar");
     let side_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
     side_box.append(&side_top);
+    side_box.append(&saved_head);
+    side_box.append(&side_saved);
     side_box.append(&side_head);
     side_box.append(&side_ns);
     let side_view = adw::ToolbarView::new();
@@ -99,26 +122,57 @@ fn build(app: &adw::Application) {
     let window = adw::ApplicationWindow::builder().application(app).title("retifs").default_width(960).default_height(660).content(&split).build();
 
     let me = Rc::new(App {
-        daemon: Arc::new(Daemon::new()),
+        daemon,
         title,
         stack,
         overview,
         ns_page,
         side_top: side_top.clone(),
+        side_saved: side_saved.clone(),
         side_ns: side_ns.clone(),
+        find: finder.clone(),
+        saved: RefCell::new(Vec::new()),
         views: RefCell::new(Vec::new()),
         shown: RefCell::new(None),
     });
 
     {
         let me = me.clone();
-        side_top.connect_row_activated(move |_, _| {
+        side_top.connect_row_activated(move |_, row| {
             me.side_ns.unselect_all();
+            me.side_saved.unselect_all();
             *me.shown.borrow_mut() = None;
-            me.title.set_title("Overview");
-            me.stack.set_visible_child_name("overview");
+            if row.index() == 1 {
+                me.title.set_title("Find");
+                me.stack.set_visible_child_name("find");
+            } else {
+                me.title.set_title("Overview");
+                me.stack.set_visible_child_name("overview");
+            }
             reload(&me);
         });
+    }
+    {
+        let me = me.clone();
+        side_saved.connect_row_activated(move |_, row| {
+            let i = row.index();
+            me.side_top.unselect_all();
+            me.side_ns.unselect_all();
+            *me.shown.borrow_mut() = None;
+            let saved = me.saved.borrow();
+            let Some((q, here, missing)) = saved.get(i as usize) else { return };
+            me.title.set_title(&q.name);
+            me.stack.set_visible_child_name("find");
+            me.find.open_saved(&q.terms(), here.clone(), *missing);
+        });
+    }
+    {
+        let me2 = me.clone();
+        *finder.on_saved.borrow_mut() = Some(Box::new(move || reload(&me2)));
+    }
+    {
+        let me = me.clone();
+        add_ns.connect_clicked(move |b| ask_add_namespace(&me, b));
     }
     {
         let me = me.clone();
@@ -159,6 +213,21 @@ fn build(app: &adw::Application) {
 
     side_top.select_row(side_top.row_at_index(0).as_ref());
     window.present();
+
+    // RETIFS_DESKTOP_SNAPSHOT=<file.png>: the window drawn to a file every
+    // 2 s (demos and screenshots without a screen grab).
+    if let Ok(path) = std::env::var("RETIFS_DESKTOP_SNAPSHOT") {
+        let window = window.clone();
+        glib::timeout_add_seconds_local(2, move || {
+            let paintable = gtk::WidgetPaintable::new(Some(&window));
+            let snapshot = gtk::Snapshot::new();
+            paintable.snapshot(&snapshot, window.width() as f64, window.height() as f64);
+            if let (Some(node), Some(renderer)) = (snapshot.to_node(), window.renderer()) {
+                let _ = renderer.render_texture(&node, None).save_to_png(&path);
+            }
+            glib::ControlFlow::Continue
+        });
+    }
 }
 
 fn label(text: &str) -> gtk::Label {
@@ -208,8 +277,10 @@ fn show_status(o: &Overview, s: &Status) {
 
 fn reload(me: &Rc<App>) {
     let me2 = me.clone();
-    bg(&me.daemon, |d| d.namespaces(), move |r| {
+    bg(&me.daemon, |d| (d.namespaces(), d.saved()), move |(r, saved)| {
         let list = r.unwrap_or_default();
+        me2.find.set_namespaces(list.iter().map(|v| v.name.clone()).filter(|n| n != "me").collect());
+        show_saved(&me2, saved);
         show_namespaces(&me2, &list);
         *me2.views.borrow_mut() = list;
         // A namespace on screen is redrawn with what's new.
@@ -218,6 +289,100 @@ fn reload(me: &Rc<App>) {
             show_ns(&me2, &name);
         }
     });
+}
+
+/// The saved searches in the sidebar (from `me`: the same on every device).
+fn show_saved(me: &Rc<App>, saved: Vec<(SavedQuery, Vec<String>, usize)>) {
+    let names: Vec<String> = saved.iter().map(|(q, _, _)| q.name.clone()).collect();
+    let before: Vec<String> = me.saved.borrow().iter().map(|(q, _, _)| q.name.clone()).collect();
+    *me.saved.borrow_mut() = saved;
+    if names == before {
+        return;
+    }
+    me.side_saved.remove_all();
+    for (q, _, _) in me.saved.borrow().iter() {
+        let item = gtk::ListBoxRow::builder().child(&label(&q.name)).tooltip_text(&q.query).build();
+        me.side_saved.append(&item);
+    }
+    // RETIFS_DESKTOP_OPEN=find or =<saved search>: open it on start (demos, screenshots).
+    if before.is_empty() {
+        if let Ok(open) = std::env::var("RETIFS_DESKTOP_OPEN") {
+            let row = if open == "find" { me.side_top.row_at_index(1) } else { names.iter().position(|n| *n == open).and_then(|i| me.side_saved.row_at_index(i as i32)) };
+            if let Some(row) = row {
+                // Selected and focused, as a click leaves it: the window's
+                // focus coming back mustn't land on (and open) Overview.
+                if let Some(list) = row.parent().and_downcast::<gtk::ListBox>() {
+                    list.select_row(Some(&row));
+                }
+                row.grab_focus();
+                row.activate();
+            }
+        }
+    }
+}
+
+/// Adds a namespace: a new one of the user's (just a name), or another's
+/// from a `retifs:` link or invitation (as `retifs open`).
+fn ask_add_namespace(me: &Rc<App>, anchor: &gtk::Button) {
+    let name = gtk::Entry::builder().placeholder_text("Name").activates_default(true).build();
+    let link = gtk::Entry::builder().placeholder_text("retifs: link (optional)").activates_default(true).build();
+    {
+        // A link names itself: its suggested name until the user types one.
+        let name = name.clone();
+        link.connect_changed(move |l| {
+            name.set_placeholder_text(Some(&Daemon::link_name(&l.text()).unwrap_or_else(|_| "Name".into())));
+        });
+    }
+    let fields = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    fields.append(&name);
+    fields.append(&link);
+    let dialog = adw::MessageDialog::builder()
+        .heading("Add a namespace")
+        .body("A name makes a new namespace of yours. To join someone else's, paste the link or invitation they gave you.")
+        .extra_child(&fields)
+        .default_response("add")
+        .close_response("cancel")
+        .build();
+    dialog.add_responses(&[("cancel", "Cancel"), ("add", "Add")]);
+    dialog.set_response_appearance("add", adw::ResponseAppearance::Suggested);
+    let window = anchor.root().and_downcast::<gtk::Window>();
+    dialog.set_transient_for(window.as_ref());
+    let me = me.clone();
+    dialog.connect_response(None, move |_, r| {
+        if r != "add" {
+            return;
+        }
+        let link = link.text().trim().to_string();
+        let typed = name.text().trim().to_string();
+        let n = if typed.is_empty() && !link.is_empty() { Daemon::link_name(&link).unwrap_or_default() } else { typed };
+        if n.is_empty() {
+            return;
+        }
+        let (me2, window, n2) = (me.clone(), window.clone(), n.clone());
+        bg(
+            &me.daemon,
+            move |d| if link.is_empty() { d.create_namespace(&n) } else { d.open_link(&link, &n) },
+            move |r| match r {
+                Ok(()) => {
+                    let me3 = me2.clone();
+                    bg(&me2.daemon, |d| d.namespaces(), move |list| {
+                        let list = list.unwrap_or_default();
+                        show_namespaces(&me3, &list);
+                        *me3.views.borrow_mut() = list;
+                        open_ns(&me3, &n2);
+                        reload(&me3);
+                    });
+                }
+                Err(e) => {
+                    let err = adw::MessageDialog::builder().heading("Couldn't add the namespace").body(e).build();
+                    err.add_response("close", "Close");
+                    err.set_transient_for(window.as_ref());
+                    err.present();
+                }
+            },
+        );
+    });
+    dialog.present();
 }
 
 fn keeps(ns: &NsView) -> String {
