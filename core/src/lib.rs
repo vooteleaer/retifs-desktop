@@ -9,6 +9,8 @@
 //! the result on its own UI thread. The core keeps no state of its own
 //! beyond the connection's runtime.
 
+pub mod device;
+
 use std::{collections::HashMap, path::PathBuf};
 
 pub use libretifs::{saved::SavedQuery, AttrValue, NsView, RecordView, StoreUsage};
@@ -106,6 +108,11 @@ impl Daemon {
     pub fn at(store: PathBuf) -> Self {
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("a tokio runtime");
         Daemon { rt, store }
+    }
+
+    /// The store this daemon owns (its settings file is there).
+    pub fn store(&self) -> &std::path::Path {
+        &self.store
     }
 
     fn client(&self) -> Result<Client, String> {

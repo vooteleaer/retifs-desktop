@@ -5,6 +5,7 @@
 //! the daemon isn't running. It finds, but doesn't browse or catalogue
 //! content: that's what apps such as a photo album are for.
 
+mod device;
 mod find;
 
 use std::{cell::RefCell, rc::Rc, sync::Arc};
@@ -50,6 +51,7 @@ struct App {
     side_saved: gtk::ListBox,
     side_ns: gtk::ListBox,
     find: Rc<find::Find>,
+    device: Rc<device::DevicePage>,
     saved: RefCell<Vec<(SavedQuery, Vec<String>, usize)>>,
     views: RefCell<Vec<NsView>>,
     shown: RefCell<Option<String>>,
@@ -80,6 +82,8 @@ fn build(app: &adw::Application) {
     let daemon = Arc::new(Daemon::new());
     let finder = find::Find::new(daemon.clone());
     stack.add_named(&finder.page, Some("find"));
+    let device_page = device::DevicePage::new(daemon.clone());
+    stack.add_named(&device_page.page, Some("device"));
 
     let content = adw::ToolbarView::new();
     content.add_top_bar(&header);
@@ -91,6 +95,7 @@ fn build(app: &adw::Application) {
     side_top.add_css_class("navigation-sidebar");
     side_top.append(&label("Overview"));
     side_top.append(&label("Find"));
+    side_top.append(&label("This device"));
     let saved_head = gtk::Label::builder().label("Saved searches").xalign(0.0).margin_start(18).margin_top(12).margin_bottom(4).build();
     saved_head.add_css_class("dim-label");
     saved_head.add_css_class("caption-heading");
@@ -141,6 +146,7 @@ fn build(app: &adw::Application) {
         side_saved: side_saved.clone(),
         side_ns: side_ns.clone(),
         find: finder.clone(),
+        device: device_page.clone(),
         saved: RefCell::new(Vec::new()),
         views: RefCell::new(Vec::new()),
         shown: RefCell::new(None),
@@ -155,6 +161,10 @@ fn build(app: &adw::Application) {
             if row.index() == 1 {
                 me.title.set_title("Find");
                 me.stack.set_visible_child_name("find");
+            } else if row.index() == 2 {
+                me.title.set_title("This device");
+                me.stack.set_visible_child_name("device");
+                me.device.refresh();
             } else {
                 me.title.set_title("Overview");
                 me.stack.set_visible_child_name("overview");
@@ -230,7 +240,12 @@ fn build(app: &adw::Application) {
         glib::ControlFlow::Continue
     });
 
-    side_top.select_row(side_top.row_at_index(0).as_ref());
+    // RETIFS_DESKTOP_PAGE=device: opens on This device (demos, screenshots).
+    let start = if std::env::var("RETIFS_DESKTOP_PAGE").as_deref() == Ok("device") { 2 } else { 0 };
+    side_top.select_row(side_top.row_at_index(start).as_ref());
+    if let Some(row) = side_top.row_at_index(start) {
+        row.activate();
+    }
     window.present();
 
     // RETIFS_DESKTOP_SNAPSHOT=<file.png>: the window drawn to a file every

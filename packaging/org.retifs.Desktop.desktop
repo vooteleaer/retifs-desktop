@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=retifs
+GenericName=retifs utility
+Comment=This device, its libraries and how they're kept
+Exec=retifs-desktop
+Icon=org.retifs.Desktop
+Terminal=false
+Categories=Network;System;
+Keywords=reticulum;sync;storage;library;
+StartupNotify=true

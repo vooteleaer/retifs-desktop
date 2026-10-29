@@ -68,7 +68,8 @@ Each one is usable on its own.
 7. **Activity:** after the change list (2).
 8. **Invitations and shares:** the Shares page (a list, + to add, delete) and the share dialog, after ADR-0020 and ADR-0021 are implemented (4, 5).
 9. **Mounts and the context menu:** the file tree on/off per namespace; Share with retifs… in Nautilus/Dolphin, and in Explorer with the Cloud Files provider.
-10. **Packaging:** AppImage/.deb (Linux), MSI (Windows), start at login.
+10. **Packaging:** a .deb (Linux, `packaging/build-deb.sh`, needs the retifs package), Windows with retifs's installer; start at login.
+11. **This device** (2026-10-29, for testers): Reticulum and its connections through prnsd's own command line (status, add a TCP connection, switch on and off, remove), the user services, and the settings in `retifs.toml` (edited in place, the daemon restarted).
 
 ## Open
 - Whether the utility also manages a node over `--via` (a headless home server from the laptop).
