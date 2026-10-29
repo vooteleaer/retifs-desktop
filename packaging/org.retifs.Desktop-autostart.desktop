@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=retifs
+Comment=retifs in the tray
+Exec=retifs-desktop --hidden
+Icon=org.retifs.Desktop
+Terminal=false
+NoDisplay=true
+X-GNOME-Autostart-enabled=true

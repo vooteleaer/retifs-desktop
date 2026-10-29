@@ -7,6 +7,8 @@
 
 mod device;
 mod find;
+#[cfg(target_os = "linux")]
+mod tray;
 
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
@@ -17,9 +19,20 @@ use retifs_desktop_core::{human, Daemon, NsView, SavedQuery, Status};
 const APP_ID: &str = "org.retifs.Desktop";
 
 fn main() -> glib::ExitCode {
+    // --hidden: started at login, into the tray only.
+    let hidden = std::env::args().any(|a| a == "--hidden");
     let app = adw::Application::builder().application_id(APP_ID).build();
-    app.connect_activate(build);
-    app.run()
+    let first = std::cell::Cell::new(true);
+    app.connect_activate(move |app| {
+        // One window: started again, it comes to the front.
+        if let Some(w) = app.windows().first() {
+            w.present();
+        } else {
+            build(app, hidden && first.get());
+        }
+        first.set(false);
+    });
+    app.run_with_args(&[std::env::args().next().unwrap_or_default()])
 }
 
 /// Runs `work` on a worker thread (daemon calls block), then `then` with its
@@ -52,12 +65,14 @@ struct App {
     side_ns: gtk::ListBox,
     find: Rc<find::Find>,
     device: Rc<device::DevicePage>,
+    retifs_up: std::cell::Cell<bool>,
+    node: RefCell<Option<String>>,
     saved: RefCell<Vec<(SavedQuery, Vec<String>, usize)>>,
     views: RefCell<Vec<NsView>>,
     shown: RefCell<Option<String>>,
 }
 
-fn build(app: &adw::Application) {
+fn build(app: &adw::Application, hidden: bool) {
     let title = adw::WindowTitle::new("Overview", "");
     let header = adw::HeaderBar::new();
     header.set_title_widget(Some(&title));
@@ -147,6 +162,8 @@ fn build(app: &adw::Application) {
         side_ns: side_ns.clone(),
         find: finder.clone(),
         device: device_page.clone(),
+        retifs_up: std::cell::Cell::new(false),
+        node: RefCell::new(None),
         saved: RefCell::new(Vec::new()),
         views: RefCell::new(Vec::new()),
         shown: RefCell::new(None),
@@ -219,6 +236,8 @@ fn build(app: &adw::Application) {
         move || {
             let (me2, banner, was_up, ticks) = (me.clone(), banner.clone(), was_up.clone(), ticks.clone());
             bg(&me.daemon, |d| d.status(), move |s: Status| {
+                me2.retifs_up.set(s.up);
+                *me2.node.borrow_mut() = s.node.clone();
                 banner.set_revealed(!s.up);
                 me2.title.set_subtitle(&match &s.node {
                     Some(n) => format!("node {}…", &n[..8.min(n.len())]),
@@ -246,7 +265,10 @@ fn build(app: &adw::Application) {
     if let Some(row) = side_top.row_at_index(start) {
         row.activate();
     }
-    window.present();
+    let in_tray = start_tray(app, &window, &me);
+    if !(hidden && in_tray) {
+        window.present();
+    }
 
     // RETIFS_DESKTOP_SNAPSHOT=<file.png>: the window drawn to a file every
     // 2 s (demos and screenshots without a screen grab).
@@ -262,6 +284,70 @@ fn build(app: &adw::Application) {
             glib::ControlFlow::Continue
         });
     }
+}
+
+/// The tray icon, where the desktop has a tray: closing the window then
+/// leaves the app running there. Returns whether it's there.
+#[cfg(target_os = "linux")]
+fn start_tray(app: &adw::Application, window: &adw::ApplicationWindow, me: &Rc<App>) -> bool {
+    let (commands, received) = async_channel::unbounded();
+    let tray = match tray::start(commands) {
+        Ok(t) => Rc::new(t),
+        Err(e) => {
+            eprintln!("no tray: {e}");
+            return false;
+        }
+    };
+    // Kept running with the window closed, where the icon is seen.
+    let host = tray.host;
+    if host {
+        std::mem::forget(app.hold());
+        window.set_hide_on_close(true);
+    } else {
+        eprintln!("no tray host on this desktop (GNOME: the AppIndicator extension): the window only");
+    }
+    {
+        let (app, window, me) = (app.clone(), window.clone(), me.clone());
+        glib::spawn_future_local(async move {
+            while let Ok(c) = received.recv().await {
+                match c {
+                    tray::TrayCommand::Open => window.present(),
+                    tray::TrayCommand::RestartRetifs => {
+                        bg(&me.daemon, |_| retifs_desktop_core::device::service("retifsd.service", "restart"), |_| {});
+                    }
+                    tray::TrayCommand::Quit => app.quit(),
+                }
+            }
+        });
+    }
+    // Reticulum every 15 s (prnsd is asked as a program), retifs from the
+    // window's own 5 s poll.
+    let me = me.clone();
+    let update = move || {
+        let (me2, tray) = (me.clone(), tray.clone());
+        bg(&me.daemon, |_| retifs_desktop_core::device::reticulum(), move |r| {
+            let outward: Vec<_> = r.interfaces.iter().filter(|i| !i.is_local()).collect();
+            tray.show(tray::TrayState {
+                retifs_up: me2.retifs_up.get(),
+                node: me2.node.borrow().clone(),
+                reticulum_up: r.running,
+                links_up: outward.iter().filter(|i| i.up).count(),
+                links: outward.len(),
+            });
+        });
+    };
+    let first = update.clone();
+    glib::timeout_add_seconds_local_once(2, first);
+    glib::timeout_add_seconds_local(15, move || {
+        update();
+        glib::ControlFlow::Continue
+    });
+    host
+}
+
+#[cfg(not(target_os = "linux"))]
+fn start_tray(_: &adw::Application, _: &adw::ApplicationWindow, _: &Rc<App>) -> bool {
+    false
 }
 
 fn label(text: &str) -> gtk::Label {

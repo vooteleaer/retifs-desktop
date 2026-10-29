@@ -14,3 +14,11 @@ path = "src/main.rs"
 retifs-desktop-core = { path = "../core" }
 gtk = { package = "gtk4", version = "0.10", features = ["v4_12"] }
 adw = { package = "libadwaita", version = "0.8", features = ["v1_4"] }
+async-channel = "2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# The tray icon (StatusNotifierItem), as prnsd's own.
+ksni = { version = "0.3.6", default-features = false, features = ["tokio"] }
+tokio = { version = "1", features = ["rt", "sync"] }
+# Whether a tray host is there (ksni's own D-Bus library).
+zbus = { version = "5", default-features = false, features = ["tokio"] }

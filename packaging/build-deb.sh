@@ -24,9 +24,11 @@ GLIBC=$(objdump -T "$BIN" | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -V
 STAGE=$(mktemp -d)
 chmod 0755 "$STAGE"
 trap 'rm -rf "$STAGE"' EXIT
-install -d "$STAGE/DEBIAN" "$STAGE/usr/bin" "$STAGE/usr/share/applications" "$STAGE/usr/share/icons/hicolor/scalable/apps" "$STAGE/usr/share/doc/retifs-desktop"
+install -d "$STAGE/DEBIAN" "$STAGE/etc/xdg/autostart" "$STAGE/usr/bin" "$STAGE/usr/share/applications" "$STAGE/usr/share/icons/hicolor/scalable/apps" "$STAGE/usr/share/doc/retifs-desktop"
 install -m 0755 "$BIN" "$STAGE/usr/bin/retifs-desktop"
 install -m 0644 "$HERE/org.retifs.Desktop.desktop" "$STAGE/usr/share/applications/"
+# In the tray from login (a desktop without a tray: nothing shows, nothing runs on).
+install -m 0644 "$HERE/org.retifs.Desktop-autostart.desktop" "$STAGE/etc/xdg/autostart/"
 install -m 0644 "$HERE/org.retifs.Desktop.svg" "$STAGE/usr/share/icons/hicolor/scalable/apps/"
 install -m 0644 "$ROOT/README.md" "$STAGE/usr/share/doc/retifs-desktop/"
 SIZE=$(du -sk "$STAGE/usr" | cut -f1)
@@ -40,8 +42,9 @@ Depends: retifs, libc6 (>= $GLIBC), libgtk-4-1 (>= 4.12), libadwaita-1-0 (>= 1.4
 Section: net
 Priority: optional
 Description: retifs utility: this device, its libraries and how they're kept
- The retifs node at a glance: Reticulum and its connections, the services,
- settings, storage, libraries and their members, and Find. A prototype.
+ The retifs node at a glance, in the tray and in a window: Reticulum and
+ its connections, the services, settings, storage, libraries and their
+ members, and Find. A prototype.
 CTRL
 DEB="$OUT/retifs-desktop_${DEBVER}_${ARCH}.deb"
 dpkg-deb --root-owner-group -Zxz --build "$STAGE" "$DEB" >/dev/null
