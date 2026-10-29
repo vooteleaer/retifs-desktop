@@ -24,7 +24,7 @@ Native widgets on each platform (the user's choice, 2026-10-21: no webview), ove
 - **gtk/** is the Linux app: an `AdwNavigationSplitView` with a sidebar (overview, namespaces), preference groups for the overview, a banner while the daemon isn't running, the node in the window subtitle.
 - **Windows:** native controls; Win32 from Rust (`windows-rs`) or a WinUI app over a C interface to the core, decided when it starts.
 - **Haiku:** a BeAPI app; Tracker already shows attributes.
-- The tray: StatusNotifierItem on Linux (KDE natively, GNOME with the AppIndicator extension), the notification area on Windows.
+- The tray: StatusNotifierItem on Linux (KDE natively, GNOME with the AppIndicator extension; built 2026-10-29), the notification area on Windows.
 - `libretifs` comes from the retifs repo (a path or git dependency).
 
 ## Views
