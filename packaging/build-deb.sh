@@ -1,25 +1,38 @@
 #!/bin/bash
-# Builds retifs-desktop_<version>_amd64.deb: the GTK 4 / libadwaita utility.
+# Builds retifs-desktop_<version>_<arch>.deb: the GTK 4 / libadwaita utility.
 # GTK 4.12 and libadwaita 1.4 or newer: Debian 13, Ubuntu 24.04. Built on
 # such a machine (it links the system's GTK); needs the retifs package.
+# arm64 on an amd64 machine: with arm64 GTK installed (dpkg multiarch:
+# libgtk-4-dev:arm64 libadwaita-1-dev:arm64) and gcc-aarch64-linux-gnu.
 #
-#     packaging/build-deb.sh [OUT_DIR]
+#     packaging/build-deb.sh [OUT_DIR] [ARCH]
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/.." && pwd)
 OUT=${1:-$ROOT/target/deb}
 export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-$ROOT/target}
-VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' "$ROOT/Cargo.toml" | head -1)
+VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' "$ROOT/Cargo.toml" | head -1 | tr -d '\r')
 COMMIT=$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)
 DATE=$(git -C "$ROOT" log -1 --format=%cd --date=format:%Y%m%d 2>/dev/null || date +%Y%m%d)
 DEBVER="$VERSION~git$DATE.$COMMIT"
-ARCH=$(dpkg --print-architecture)
+ARCH=${2:-$(dpkg --print-architecture)}
 mkdir -p "$OUT"
 
-cargo build --release --locked --manifest-path "$ROOT/Cargo.toml" -p retifs-desktop-gtk
-BIN=$CARGO_TARGET_DIR/release/retifs-desktop
+if [ "$ARCH" = "$(dpkg --print-architecture)" ]; then
+    cargo build --release --locked --manifest-path "$ROOT/Cargo.toml" -p retifs-desktop-gtk
+    BIN=$CARGO_TARGET_DIR/release/retifs-desktop
+    OBJDUMP=objdump
+else
+    case $ARCH in
+        arm64) TRIPLE=aarch64-linux-gnu; TARGET=aarch64-unknown-linux-gnu ;;
+        *) echo "unknown arch $ARCH" >&2; exit 2 ;;
+    esac
+    PKG_CONFIG_ALLOW_CROSS=1 PKG_CONFIG_PATH=/usr/lib/$TRIPLE/pkgconfig PKG_CONFIG_LIBDIR=/usr/lib/$TRIPLE/pkgconfig:/usr/share/pkgconfig     CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=$TRIPLE-gcc         cargo build --release --locked --target $TARGET --manifest-path "$ROOT/Cargo.toml" -p retifs-desktop-gtk
+    BIN=$CARGO_TARGET_DIR/$TARGET/release/retifs-desktop
+    OBJDUMP=$TRIPLE-objdump
+fi
 # The newest glibc symbol it uses: its libc6 dependency.
-GLIBC=$(objdump -T "$BIN" | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -V | tail -1)
+GLIBC=$($OBJDUMP -T "$BIN" | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -V | tail -1)
 
 STAGE=$(mktemp -d)
 chmod 0755 "$STAGE"
