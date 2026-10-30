@@ -7,7 +7,7 @@ One retifs (the same Rust daemon, `retifsd`, and the same transport, Prns) and o
 | **Linux** | runs (amd64, arm64) | bundled prnsd, or the machine's | GTK 4 / libadwaita, tray (StatusNotifierItem) | FUSE mount | .deb (retifs amd64+arm64, utility amd64) |
 | **Windows** | runs | bundled prnsd, or the user's | Win32, notification area | Cloud Files | retifs-setup.exe (per user) |
 | **Android** | runs (emulator, x86_64; aarch64 builds) | bundled prnsd, TCP shared instance | Kotlin + Compose, foreground service | — (DocumentsProvider planned) | debug APK (`android/build-apk.ps1`) |
-| **Haiku** | type-checks (x86_64) | prns-haiku: type-checks | — (BeAPI planned) | — (userlandfs planned) | — (hpkg planned) |
+| **Haiku** | runs (x86_64, native build) | prnsd not yet (third-party crates); a shared instance elsewhere works | — (BeAPI planned) | — (userlandfs planned) | — (hpkg planned) |
 
 ## Linux
 Done: the `retifs` .deb for amd64 and arm64 (glibc 2.36+: Debian 12, Ubuntu 22.04, Raspberry Pi OS bookworm), prnsd bundled and started only where no Reticulum runs; the utility's .deb for amd64 (GTK 4.12+, libadwaita 1.4+: Debian 13, Ubuntu 24.04), in the tray from login.
@@ -50,7 +50,8 @@ Plan, one app, "retifs":
 Haiku's own way, not Linux's: settings in `~/config/settings/retifs`, launch_daemon, hpkg, the Haiku API for UI, attributes and live queries as Haiku does them.
 
 - **Reticulum:** the prns-haiku project (prnsd port, Network preferences add-on, Deskbar replicant). It cross-checks for `x86_64-unknown-haiku` with one patch; not linked or run yet.
-- **retifsd:** every retifs crate and the utility's core type-check for `x86_64-unknown-haiku` (nightly, `-Zbuild-std`; with the prns-haiku patch). Not linked or run: that needs Haiku's cross toolchain or a Haiku VM (QEMU with KVM in WSL works for that). Still to see at run time: redb's file locking and mmap, mio's poll, passing file descriptors (SCM_RIGHTS).
+- **retifsd runs (2026-10-30)** on Haiku nightly hrev60299 (x86_64, a QEMU VM): built natively with HaikuPorts' Rust 1.94.1 and gcc 13 (`--ignore-rust-version`: Prns asks for 1.96 but builds), with prns-haiku's keepalive patch and no change to retifs. With a shared instance reached over a tunnel it attached, heard the testbed's public libraries, joined one lazily, and held 1.2 GB that other nodes placed on it within 20 minutes: the store (redb, slabs, file locking, mmap), tokio and mio, and Reticulum links in both directions work. Not yet: files in Tracker (userlandfs, the Haiku API) and prnsd itself.
+- **prnsd on Haiku** still blocks on two third-party crates (`mdns-sd`/`socket-pktinfo`, `if-addrs`; see prns-haiku). Until then retifsd on Haiku needs a shared instance on another machine, or Prns built without those features.
 - **Files: userlandfs**, natively (ADR-0002): records with their attributes as Haiku attributes, indexes and live queries in Tracker. Haiku is where retifs's model fits best: BeFS already has records with attributes and queries.
 - **Utility:** a BeAPI app (C++) over the core through a C interface (cbindgen), or Rust bindings to the Haiku API; a Deskbar replicant for the state.
-- **Needs a Haiku machine:** a VM (QEMU or VirtualBox) with a nightly Haiku, or real hardware.
+- **Test machine:** a Haiku nightly VM in QEMU (KVM, in WSL here), driven headless; real hardware later.
