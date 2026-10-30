@@ -20,6 +20,17 @@ android {
 
     buildFeatures { compose = true }
 
+    buildTypes {
+        // Shrunk (R8 keeps the native methods the JNI library implements).
+        // Signed with the debug key for now: for testers, not a store.
+        release {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
+            signingConfig = signingConfigs.getByName("debug")
+        }
+    }
+
     // retifsd and prnsd run as programs from the native library folder
     // (Android lets an app execute its native libraries, not files it writes):
     // they must be extracted there, not left in the APK.

@@ -1,12 +1,14 @@
 # Builds the Android app (a debug APK): the core's JNI library, retifsd and
 # prnsd for each ABI with the NDK, into app/src/main/jniLibs, then Gradle.
 #
-#     powershell -ExecutionPolicy Bypass -File android\build-apk.ps1 [-Abis arm64-v8a,x86_64]
+#     powershell -ExecutionPolicy Bypass -File android\build-apk.ps1 [-Abis arm64-v8a,x86_64] [-Release]
+#
+# -Release: shrunk with R8 and signed with the debug key (for testers).
 #
 # Needs the Android SDK with NDK 27 ($env:ANDROID_HOME, default C:\Android\Sdk),
 # JDK 17, rustup targets aarch64-linux-android and x86_64-linux-android, retifs
 # and Prns 0.3.8 next to retifs-desktop.
-param([string[]]$Abis = @("arm64-v8a", "x86_64"))
+param([string[]]$Abis = @("arm64-v8a", "x86_64"), [switch]$Release)
 
 $ErrorActionPreference = "Stop"
 $Here = $PSScriptRoot
@@ -51,8 +53,8 @@ foreach ($abi in $Abis) {
 Write-Host "== APK"
 Push-Location $Here
 try {
-    & .\gradlew.bat --no-daemon assembleDebug
+    & .\gradlew.bat --no-daemon $(if ($Release) { "assembleRelease" } else { "assembleDebug" })
     if ($LASTEXITCODE -ne 0) { throw "gradle failed" }
 } finally { Pop-Location }
-$apk = "$Here\app\build\outputs\apk\debug\app-debug.apk"
+$apk = if ($Release) { "$Here\app\build\outputs\apk\release\app-release.apk" } else { "$Here\app\build\outputs\apk\debug\app-debug.apk" }
 "== $apk ({0:N1} MB)" -f ((Get-Item $apk).Length / 1MB)
