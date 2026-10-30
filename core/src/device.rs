@@ -42,6 +42,10 @@ pub struct Reticulum {
 /// The prnsd to use: the one the retifs package bundles, one on the PATH,
 /// or (Windows) the managed one.
 pub fn prnsd() -> Option<PathBuf> {
+    // Where an app ships it itself (Android: among its native libraries).
+    if let Some(p) = std::env::var_os("RETIFS_PRNSD").map(PathBuf::from).filter(|p| p.is_file()) {
+        return Some(p);
+    }
     let bundled = if cfg!(windows) { install_dir().join("prnsd.exe") } else { PathBuf::from("/usr/lib/retifs/prnsd") };
     if bundled.is_file() {
         return Some(bundled);
@@ -141,6 +145,10 @@ fn run_prnsd(args: &[&str]) -> Result<(), String> {
 /// (`prnsd start`, Windows) applies it live; the package's service runs
 /// `prnsd run`, which can't, so it's restarted.
 fn reconfigure(args: &[&str]) -> Result<(), String> {
+    // An app that runs prnsd itself (Android) restarts it after the change.
+    if std::env::var("RETIFS_PRNSD_APPLY").as_deref() == Ok("restart") {
+        return run_prnsd(args);
+    }
     if service_state(BUNDLED).as_deref() == Some("active") {
         run_prnsd(args)?;
         service(BUNDLED, "restart")
@@ -286,10 +294,11 @@ pub fn supervise() -> Vec<String> {
 }
 
 /// The settings the utility offers, of `retifs.toml`'s: (section, key, what it is).
-pub const SETTINGS: [(&str, &str, &str); 6] = [
+pub const SETTINGS: [(&str, &str, &str); 7] = [
     ("node", "device", "This device's name"),
     ("node", "site", "Where it is (one copy of its files is kept at another site)"),
     ("store", "max_store", "Store limit"),
+    ("store", "min_free", "Always leave this much free on the disk"),
     ("store", "no_storage", "Keep nothing of my own here (only a keyring)"),
     ("placement", "hold_for_others", "Hold others' encrypted copies up to (0: none)"),
     ("placement", "min_copies", "Copies of each of my files, this one included"),

@@ -137,6 +137,41 @@ impl Daemon {
         }
     }
 
+    fn request(&self, c: &mut Client, req: Request) -> Result<Response, String> {
+        match self.rt.block_on(c.call(req)).map_err(|e| e.to_string())? {
+            Response::Error { message } => Err(message),
+            r => Ok(r),
+        }
+    }
+
+    /// Public libraries heard announced on the network (retifs ADR-0029).
+    pub fn heard(&self) -> Result<Vec<libretifs::HeardLibrary>, String> {
+        let mut c = self.client()?;
+        match self.request(&mut c, Request::HeardLibraries)? {
+            Response::Heard { libraries } => Ok(libraries),
+            _ => Err("unexpected answer".into()),
+        }
+    }
+
+    /// Joins a heard library lazily (only what's looked at is fetched), from
+    /// the node that announced it, under a name not taken here. Its name.
+    pub fn join_heard(&self, l: &libretifs::HeardLibrary) -> Result<String, String> {
+        let base = libretifs::link::suggest_name(if l.name.trim().is_empty() { "library" } else { &l.name });
+        let mut c = self.client()?;
+        let taken = match self.request(&mut c, Request::Namespaces)? {
+            Response::Names { names } => names,
+            _ => Vec::new(),
+        };
+        let name = std::iter::once(base.clone()).chain((2..).map(|i| format!("{base}-{i}"))).find(|n| !taken.contains(n)).expect("a free name");
+        self.request(&mut c, Request::NsJoin { ns: name.clone(), address: l.address.clone(), from: vec![l.node.clone()], lazy: true }).map(|_| name)
+    }
+
+    /// Leaves a library on this device (others keep their copies).
+    pub fn leave(&self, ns: &str) -> Result<(), String> {
+        let mut c = self.client()?;
+        self.request(&mut c, Request::NsLeave { ns: ns.into(), mine: false }).map(|_| ())
+    }
+
     /// The namespaces a search may look in (all but `me`).
     pub fn namespace_names(&self) -> Result<Vec<String>, String> {
         let mut c = self.client()?;
