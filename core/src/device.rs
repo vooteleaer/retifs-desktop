@@ -1,8 +1,9 @@
 //! This device: Reticulum (the shared instance retifs runs on), the
 //! services, and the node's settings. Reticulum is asked through `prnsd`'s
 //! own command line (`status --json`, `interfaces …`); the services are
-//! systemd user units on Linux (the .deb's); the settings are the daemon's
-//! `retifs.toml`, edited in place so its comments stay.
+//! systemd user units on Linux (the .deb's) and, on Windows, processes the
+//! utility itself starts at login (the installer's); the settings are the
+//! daemon's `retifs.toml`, edited in place so its comments stay.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -41,12 +42,12 @@ pub struct Reticulum {
 /// The prnsd to use: the one the retifs package bundles, one on the PATH,
 /// or (Windows) the managed one.
 pub fn prnsd() -> Option<PathBuf> {
-    let bundled = PathBuf::from("/usr/lib/retifs/prnsd");
+    let bundled = if cfg!(windows) { install_dir().join("prnsd.exe") } else { PathBuf::from("/usr/lib/retifs/prnsd") };
     if bundled.is_file() {
         return Some(bundled);
     }
     if let Some(base) = std::env::var_os("LOCALAPPDATA") {
-        for name in ["retifs\\bin\\prnsd.exe", "prnsd\\prnsd-managed.exe"] {
+        for name in ["prnsd\\prnsd-managed.exe"] {
             let p = PathBuf::from(&base).join(name);
             if p.is_file() {
                 return Some(p);
@@ -151,7 +152,10 @@ fn reconfigure(args: &[&str]) -> Result<(), String> {
 }
 
 /// The package's Reticulum service.
+#[cfg(not(windows))]
 const BUNDLED: &str = "retifs-prnsd.service";
+#[cfg(windows)]
+const BUNDLED: &str = "prnsd";
 
 /// Adds a TCP connection to another Reticulum node.
 pub fn add_tcp(name: &str, host: &str, port: u16) -> Result<(), String> {
@@ -168,23 +172,117 @@ pub fn remove_interface(name: &str) -> Result<(), String> {
 }
 
 /// The user services the retifs package installs (Linux, systemd).
-pub const SERVICES: [(&str, &str); 3] = [("retifsd.service", "retifs daemon"), ("retifs-prnsd.service", "Reticulum (bundled prnsd)"), ("retifs-gateway.service", "Libraries as local websites")];
+#[cfg(not(windows))]
+pub const SERVICES: &[(&str, &str)] = &[("retifsd.service", "retifs daemon"), ("retifs-prnsd.service", "Reticulum (bundled prnsd)"), ("retifs-gateway.service", "Libraries as local websites")];
+/// On Windows: the programs next to the utility, which it starts itself.
+#[cfg(windows)]
+pub const SERVICES: &[(&str, &str)] = &[("retifsd", "retifs daemon"), ("prnsd", "Reticulum (bundled prnsd)")];
+
+/// The service retifs itself runs as.
+pub const RETIFSD: &str = SERVICES[0].0;
 
 /// A user service's state ("active", "inactive", "failed", …), None where
 /// there's no systemd.
+#[cfg(not(windows))]
 pub fn service_state(unit: &str) -> Option<String> {
-    if cfg!(windows) {
-        return None;
-    }
     let o = Command::new("systemctl").args(["--user", "is-active", unit]).output().ok()?;
     let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
     (!s.is_empty()).then_some(s)
 }
 
 /// `start`, `stop` or `restart` a user service.
+#[cfg(not(windows))]
 pub fn service(unit: &str, action: &str) -> Result<(), String> {
     let o = Command::new("systemctl").args(["--user", action, unit]).output().map_err(|e| e.to_string())?;
     if o.status.success() { Ok(()) } else { Err(first_line(&o.stderr, "systemctl failed")) }
+}
+
+/// Where the utility is installed, with the programs it starts (Windows).
+pub fn install_dir() -> PathBuf {
+    std::env::current_exe().ok().and_then(|p| p.parent().map(Path::to_path_buf)).unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// Whether a Reticulum shared instance listens on this machine (its TCP
+/// port, as on Windows).
+pub fn shared_instance_up() -> bool {
+    std::net::TcpStream::connect_timeout(&([127, 0, 0, 1], 37428).into(), std::time::Duration::from_millis(400)).is_ok()
+}
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+#[cfg(windows)]
+fn running(exe: &str) -> bool {
+    use std::os::windows::process::CommandExt;
+    Command::new("tasklist")
+        .args(["/FI", &format!("IMAGENAME eq {exe}"), "/NH"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_ascii_lowercase().contains(&exe.to_ascii_lowercase()))
+        .unwrap_or(false)
+}
+
+/// A program's state: "active" while it runs ("prnsd": this install's own,
+/// not another prnsd the user runs).
+#[cfg(windows)]
+pub fn service_state(name: &str) -> Option<String> {
+    Some(if running(&format!("{name}.exe")) { "active" } else { "inactive" }.to_string())
+}
+
+/// `start`, `stop` or `restart` one of the programs next to the utility,
+/// hidden, its output in `%LOCALAPPDATA%\retifs\logs\<name>.log`.
+#[cfg(windows)]
+pub fn service(name: &str, action: &str) -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    let exe = format!("{name}.exe");
+    if action == "stop" || action == "restart" {
+        let _ = Command::new("taskkill").args(["/IM", &exe, "/F"]).creation_flags(CREATE_NO_WINDOW).output();
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+    if action == "start" || action == "restart" {
+        if name == "prnsd" && shared_instance_up() {
+            return Err("another Reticulum runs on this machine already".into());
+        }
+        let logs = PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_default()).join("retifs").join("logs");
+        std::fs::create_dir_all(&logs).map_err(|e| e.to_string())?;
+        let log = std::fs::OpenOptions::new().create(true).append(true).open(logs.join(format!("{name}.log"))).map_err(|e| e.to_string())?;
+        let args: &[&str] = if name == "prnsd" { &["run"] } else { &[] };
+        Command::new(install_dir().join(&exe))
+            .args(args)
+            .stdout(log.try_clone().map_err(|e| e.to_string())?)
+            .stderr(log)
+            // No console, and a process group of its own.
+            .creation_flags(CREATE_NO_WINDOW | 0x0000_0200)
+            .spawn()
+            .map_err(|e| format!("{exe}: {e}"))?;
+    }
+    Ok(())
+}
+
+/// At login (Windows): Reticulum where none runs yet, then retifs. Says what
+/// it did.
+#[cfg(windows)]
+pub fn supervise() -> Vec<String> {
+    let mut did = Vec::new();
+    if !shared_instance_up() && install_dir().join("prnsd.exe").is_file() {
+        match service("prnsd", "start") {
+            Ok(()) => did.push("started Reticulum (prnsd)".to_string()),
+            Err(e) => did.push(format!("Reticulum: {e}")),
+        }
+        for _ in 0..30 {
+            if shared_instance_up() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+    }
+    if !running("retifsd.exe") {
+        match service("retifsd", "start") {
+            Ok(()) => did.push("started retifsd".to_string()),
+            Err(e) => did.push(format!("retifsd: {e}")),
+        }
+    }
+    did
 }
 
 /// The settings the utility offers, of `retifs.toml`'s: (section, key, what it is).

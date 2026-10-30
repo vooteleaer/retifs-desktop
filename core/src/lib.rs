@@ -10,6 +10,7 @@
 //! beyond the connection's runtime.
 
 pub mod device;
+pub mod status_icon;
 
 use std::{collections::HashMap, path::PathBuf};
 
@@ -79,6 +80,11 @@ pub struct Status {
     pub chunks: u64,
     pub usage: Option<StoreUsage>,
     pub error: Option<String>,
+}
+
+/// The store the local daemon owns (`$RETIFS_STORE`, else the platform default).
+pub fn default_store() -> PathBuf {
+    libretifs::default_store_dir()
 }
 
 /// Human-readable sizes (binary units).

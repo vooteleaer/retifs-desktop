@@ -313,7 +313,7 @@ fn start_tray(app: &adw::Application, window: &adw::ApplicationWindow, me: &Rc<A
                 match c {
                     tray::TrayCommand::Open => window.present(),
                     tray::TrayCommand::RestartRetifs => {
-                        bg(&me.daemon, |_| retifs_desktop_core::device::service("retifsd.service", "restart"), |_| {});
+                        bg(&me.daemon, |_| retifs_desktop_core::device::service(retifs_desktop_core::device::RETIFSD, "restart"), |_| {});
                     }
                     tray::TrayCommand::Quit => app.quit(),
                 }

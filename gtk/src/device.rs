@@ -43,13 +43,13 @@ impl DevicePage {
 
         let svc_group = adw::PreferencesGroup::builder().title("Services").description("systemd user services: they start with your session.").build();
         let mut services = Vec::new();
-        for (unit, what) in device::SERVICES {
+        for &(unit, what) in device::SERVICES {
             let row = adw::ActionRow::builder().title(what).subtitle(unit).build();
             svc_group.add(&row);
             services.push((unit, what, row));
         }
         // Only where there's systemd (the Linux package).
-        svc_group.set_visible(device::service_state("retifsd.service").is_some());
+        svc_group.set_visible(device::service_state(device::RETIFSD).is_some());
         page.add(&svc_group);
 
         let save = gtk::Button::builder().label("Save and restart").valign(gtk::Align::Center).css_classes(["suggested-action"]).sensitive(false).build();
@@ -120,7 +120,7 @@ impl DevicePage {
     /// Reticulum and the services, asked again.
     pub fn refresh(self: &Rc<Self>) {
         let me = self.clone();
-        bg(&self.daemon, |_| (device::reticulum(), device::configured(), device::SERVICES.map(|(u, _)| device::service_state(u))), move |(r, conf, states)| {
+        bg(&self.daemon, |_| (device::reticulum(), device::configured(), device::SERVICES.iter().map(|(u, _)| device::service_state(u)).collect::<Vec<_>>()), move |(r, conf, states)| {
             me.show_reticulum(&r, conf.unwrap_or_default());
             for ((_, what, row), state) in me.services.iter().zip(states) {
                 row.set_title(&format!("{what} — {}", state.unwrap_or_else(|| "?".into())));
@@ -280,7 +280,7 @@ impl DevicePage {
         }
         self.load_settings();
         let me = self.clone();
-        bg(&self.daemon, |_| device::service("retifsd.service", "restart"), move |r| {
+        bg(&self.daemon, |_| device::service(device::RETIFSD, "restart"), move |r| {
             me.shared.set_subtitle(&match r {
                 Ok(()) => "Settings saved; retifs restarted".to_string(),
                 Err(_) => "Settings saved; restart retifsd to use them".to_string(),
