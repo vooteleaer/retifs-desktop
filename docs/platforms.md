@@ -6,8 +6,8 @@ One retifs (the same Rust daemon, `retifsd`, and the same transport, Prns) and o
 |---|---|---|---|---|---|
 | **Linux** | runs (amd64, arm64) | bundled prnsd, or the machine's | GTK 4 / libadwaita, tray (StatusNotifierItem) | FUSE mount | .deb (retifs amd64+arm64, utility amd64) |
 | **Windows** | runs | bundled prnsd, or the user's | Win32, notification area | Cloud Files | retifs-setup.exe (per user) |
-| **Android** | cross-compiles (aarch64) | prnsd cross-compiles (TCP) | — (Kotlin + Compose planned) | — (DocumentsProvider planned) | — (APK planned) |
-| **Haiku** | not tried | prns-haiku: cross-checks | — (BeAPI planned) | — (userlandfs planned) | — (hpkg planned) |
+| **Android** | runs (emulator, x86_64; aarch64 builds) | bundled prnsd, TCP shared instance | Kotlin + Compose, foreground service | — (DocumentsProvider planned) | debug APK (`android/build-apk.ps1`) |
+| **Haiku** | type-checks (x86_64) | prns-haiku: type-checks | — (BeAPI planned) | — (userlandfs planned) | — (hpkg planned) |
 
 ## Linux
 Done: the `retifs` .deb for amd64 and arm64 (glibc 2.36+: Debian 12, Ubuntu 22.04, Raspberry Pi OS bookworm), prnsd bundled and started only where no Reticulum runs; the utility's .deb for amd64 (GTK 4.12+, libadwaita 1.4+: Debian 13, Ubuntu 24.04), in the tray from login.
@@ -24,7 +24,17 @@ Done: the utility (Win32, Common Controls 6, per-monitor DPI) with Overview, Net
 Next: Libraries and Find (as on Linux); a signed installer (SmartScreen warns about unsigned ones); the service state should name the store a running retifsd serves, not just that one runs.
 
 ## Android
-**Spike (2026-10-30):** `retifsd`, the `retifs` CLI and `prnsd` (feature `tokio-cloud-host`: TCP, no serial or Bluetooth) cross-compile unchanged for `aarch64-linux-android` (API 26) with NDK 27. Not run yet: no device or emulator here.
+**Runs (2026-10-30)**, in an Android 14 emulator (x86_64) with the app from `android/`: the foreground service starts the bundled prnsd and retifsd; a TCP connection added in the app connects to the testbed; the testbed's public libraries are heard, and Join adds one, fetched as needed. `retifsd`, `retifs` and `prnsd` (feature `tokio-cloud-host`: TCP, no serial or Bluetooth) build unchanged with NDK 27 for `aarch64-linux-android` and `x86_64-linux-android` (API 26). Not yet on a real phone.
+
+What it took:
+- **The shared instance on TCP:** the app writes prnsd's first config with `shared_instance_type = tcp` (port 37428). On Android prnsd listens on the abstract socket by default while Prns clients look for TCP (to report to Prns).
+- **prnsd run by the app** (`prnsd run`) can't apply interface changes live (`--apply` needs a managed daemon): the core restarts it instead (`RETIFS_PRNSD_APPLY=restart`), and retifsd with it, as a Prns client doesn't attach to a new shared instance by itself (to report to Prns).
+- **Phone defaults**, set once and changeable in Settings: nothing held for others, 1 GB kept free (the desktop default, max(10 %, 5 GB), left a phone with less free space no room at all), the device named after the model.
+- **On the other end:** a prnsd interface a phone connects to needs `--ingress-control false`, or the phone's announces are held back.
+
+Next: an arm64 build on a real phone; Find and libraries' contents; the DocumentsProvider; battery (below).
+
+The plan it follows:
 
 Plan, one app, "retifs":
 - **Kotlin and Jetpack Compose** (Material 3), the platform's own toolkit.
@@ -40,7 +50,7 @@ Plan, one app, "retifs":
 Haiku's own way, not Linux's: settings in `~/config/settings/retifs`, launch_daemon, hpkg, the Haiku API for UI, attributes and live queries as Haiku does them.
 
 - **Reticulum:** the prns-haiku project (prnsd port, Network preferences add-on, Deskbar replicant). It cross-checks for `x86_64-unknown-haiku` with one patch; not linked or run yet.
-- **retifsd:** to check what blocks it: redb (file locking, mmap), tokio and mio on Haiku, zstd's C code with Haiku's cross compiler, passing file descriptors over Unix sockets (SCM_RIGHTS).
+- **retifsd:** every retifs crate and the utility's core type-check for `x86_64-unknown-haiku` (nightly, `-Zbuild-std`; with the prns-haiku patch). Not linked or run: that needs Haiku's cross toolchain or a Haiku VM (QEMU with KVM in WSL works for that). Still to see at run time: redb's file locking and mmap, mio's poll, passing file descriptors (SCM_RIGHTS).
 - **Files: userlandfs**, natively (ADR-0002): records with their attributes as Haiku attributes, indexes and live queries in Tracker. Haiku is where retifs's model fits best: BeFS already has records with attributes and queries.
 - **Utility:** a BeAPI app (C++) over the core through a C interface (cbindgen), or Rust bindings to the Haiku API; a Deskbar replicant for the state.
 - **Needs a Haiku machine:** a VM (QEMU or VirtualBox) with a nightly Haiku, or real hardware.
