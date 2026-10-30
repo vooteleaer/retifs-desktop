@@ -22,6 +22,10 @@ $Api = 26
 
 function Invoke-Cargo { & cargo.exe @args; if ($LASTEXITCODE -ne 0) { throw "cargo $args failed" } }
 
+# Only the ABIs asked for go into the APK (an arm64-only one for phones is smaller).
+Get-ChildItem "$Here\app\src\main\jniLibs" -Directory -ErrorAction SilentlyContinue |
+    Where-Object { $Abis -notcontains $_.Name } | Remove-Item -Recurse -Force
+
 foreach ($abi in $Abis) {
     $triple = @{ "arm64-v8a" = "aarch64-linux-android"; "x86_64" = "x86_64-linux-android" }[$abi]
     $var = $triple.ToUpper().Replace("-", "_")
