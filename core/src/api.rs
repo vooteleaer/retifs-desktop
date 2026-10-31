@@ -100,6 +100,19 @@ pub fn save_settings(values: &str) -> Result<(), String> {
     std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))
 }
 
+/// What a tray icon shows: `health` ("good", "partly", "down") and the
+/// lines of text for its tooltip or menu.
+pub fn tray() -> Value {
+    use crate::status_icon::{Health, TrayState};
+    let t = TrayState::of(&Daemon::new().status(), &device::reticulum());
+    let health = match t.health() {
+        Health::Good => "good",
+        Health::Partly => "partly",
+        Health::Down => "down",
+    };
+    json!({ "health": health, "lines": t.lines() })
+}
+
 /// The services retifs runs as here, with their state.
 pub fn services() -> Value {
     let list: Vec<Value> = device::SERVICES

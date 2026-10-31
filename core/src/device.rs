@@ -252,8 +252,20 @@ pub fn service(job: &str, action: &str) -> Result<(), String> {
     if o.status.success() { Ok(()) } else { Err(first_line(&o.stderr, "launch_roster failed")) }
 }
 
+static INSTALL_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Says where the utility is installed, when the program running isn't it
+/// (Haiku: the Deskbar replicant runs inside the Deskbar). Only the first
+/// call counts.
+pub fn set_install_dir(dir: PathBuf) {
+    let _ = INSTALL_DIR.set(dir);
+}
+
 /// Where the utility is installed, with the programs it starts (Windows, Haiku).
 pub fn install_dir() -> PathBuf {
+    if let Some(dir) = INSTALL_DIR.get() {
+        return dir.clone();
+    }
     std::env::current_exe().ok().and_then(|p| p.parent().map(Path::to_path_buf)).unwrap_or_else(|| PathBuf::from("."))
 }
 

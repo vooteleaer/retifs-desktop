@@ -24,6 +24,19 @@ pub enum Health {
 }
 
 impl TrayState {
+    /// From the daemon's status and Reticulum's: links are the connections
+    /// to other nodes (the shared instance's local ones don't count).
+    pub fn of(status: &crate::Status, r: &crate::device::Reticulum) -> TrayState {
+        let outward: Vec<_> = r.interfaces.iter().filter(|i| !i.is_local()).collect();
+        TrayState {
+            retifs_up: status.up,
+            node: status.node.clone(),
+            reticulum_up: r.running,
+            links_up: outward.iter().filter(|i| i.up).count(),
+            links: outward.len(),
+        }
+    }
+
     pub fn health(&self) -> Health {
         match (self.retifs_up, self.reticulum_up) {
             (true, true) if self.links_up > 0 || self.links == 0 => Health::Good,

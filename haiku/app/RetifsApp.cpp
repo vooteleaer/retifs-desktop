@@ -12,12 +12,18 @@
 
 #include <Alert.h>
 #include <Application.h>
+#include <Bitmap.h>
 #include <Button.h>
 #include <CheckBox.h>
+#include <Deskbar.h>
 #include <LayoutBuilder.h>
 #include <ListItem.h>
 #include <ListView.h>
+#include <MenuItem.h>
 #include <MessageRunner.h>
+#include <Path.h>
+#include <PopUpMenu.h>
+#include <Roster.h>
 #include <ScrollView.h>
 #include <SeparatorView.h>
 #include <StringList.h>
@@ -30,11 +36,13 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "retifs_desktop.h"
 
 static const char* kSignature = "application/x-vnd.retifs-desktop";
 static const char* kDaemonJob = "x-vnd.retifs-daemon";
+static const char* kReplicantName = "retifs";
 
 enum {
 	kRefresh = 'rfsh',		// worker: read everything again
@@ -576,18 +584,281 @@ private:
 };
 
 
+// #pragma mark - Deskbar replicant
+
+
+/*!	retifs in the Deskbar's tray: the shared status icon (the same as on
+	Linux and Windows), and a menu with how things are and what to do.
+	Deskbar loads the app's image and calls instantiate_deskbar_item(); the
+	view lives in the Deskbar's process, so the core's blocking calls run in
+	a thread of its own, which sends the view what it found.
+*/
+class _EXPORT DeskbarView : public BView {
+public:
+	DeskbarView(BRect frame)
+		:
+		BView(frame, kReplicantName, B_FOLLOW_NONE, B_WILL_DRAW),
+		fIcon(NULL),
+		fHealth("down"),
+		fPoller(-1),
+		fQuit(false)
+	{
+	}
+
+	/*! Deskbar keeps its replicants archived and makes them again from the
+		archive (finding this app by the "add_on" signature in it). */
+	DeskbarView(BMessage* archive)
+		:
+		BView(archive),
+		fIcon(NULL),
+		fHealth("down"),
+		fPoller(-1),
+		fQuit(false)
+	{
+	}
+
+	~DeskbarView()
+	{
+		delete fIcon;
+	}
+
+	// Defined outside the class: Deskbar looks Instantiate() up by name, and
+	// a function defined inside it that nothing here calls isn't emitted.
+	static BArchivable* Instantiate(BMessage* archive);
+	status_t Archive(BMessage* data, bool deep = true) const;
+
+	void AttachedToWindow()
+	{
+		BView::AttachedToWindow();
+		AdoptParentColors();
+		// In the Deskbar's process the core can't tell the app's folder (and
+		// the bundled prnsd in it) from the program running: say it.
+		entry_ref ref;
+		BPath app, folder;
+		if (be_roster->FindApp(kSignature, &ref) == B_OK
+			&& app.SetTo(&ref) == B_OK && app.GetParent(&folder) == B_OK)
+			rd_set_app_dir(folder.Path());
+		_Draw();
+		fPoller = spawn_thread(_Poll, "retifs tray", B_LOW_PRIORITY, this);
+		resume_thread(fPoller);
+	}
+
+	void DetachedFromWindow()
+	{
+		fQuit = true;
+		status_t ignored;
+		wait_for_thread(fPoller, &ignored);
+		BView::DetachedFromWindow();
+	}
+
+	void Draw(BRect)
+	{
+		if (fIcon == NULL)
+			return;
+		SetDrawingMode(B_OP_ALPHA);
+		SetBlendingMode(B_PIXEL_ALPHA, B_ALPHA_OVERLAY);
+		DrawBitmap(fIcon, Bounds().LeftTop()
+			+ BPoint((Bounds().Width() - fIcon->Bounds().Width()) / 2,
+				(Bounds().Height() - fIcon->Bounds().Height()) / 2));
+	}
+
+	void MessageReceived(BMessage* message)
+	{
+		switch (message->what) {
+			case kTray:
+			{
+				BString health = message->GetString("health", "down");
+				fLines.MakeEmpty();
+				BMessage lines;
+				if (message->FindMessage("lines", &lines) == B_OK) {
+					for (int32 i = 0; i < Count(lines); i++) {
+						BString name;
+						name << i;
+						fLines.Add(lines.GetString(name.String(), ""));
+					}
+				}
+				if (health != fHealth) {
+					fHealth = health;
+					_Draw();
+					Invalidate();
+				}
+				break;
+			}
+			case kOpen:
+				be_roster->Launch(kSignature);
+				break;
+			case kRestart:
+				_Detached(_Restart);
+				break;
+			case kRemove:
+				_Detached(_Remove);
+				break;
+			default:
+				BView::MessageReceived(message);
+		}
+	}
+
+	void MouseDown(BPoint where)
+	{
+		BPopUpMenu* menu = new BPopUpMenu("retifs", false, false);
+		for (int32 i = 0; i < fLines.CountStrings(); i++) {
+			BMenuItem* item = new BMenuItem(fLines.StringAt(i).String(), NULL);
+			item->SetEnabled(false);
+			menu->AddItem(item);
+		}
+		if (fLines.CountStrings() > 0)
+			menu->AddSeparatorItem();
+		menu->AddItem(new BMenuItem("Open retifs" B_UTF8_ELLIPSIS,
+			new BMessage(kOpen)));
+		menu->AddItem(new BMenuItem("Restart retifs", new BMessage(kRestart)));
+		menu->AddSeparatorItem();
+		menu->AddItem(new BMenuItem("Remove from Deskbar",
+			new BMessage(kRemove)));
+		menu->SetTargetForItems(this);
+		menu->SetAsyncAutoDestruct(true);
+		menu->Go(ConvertToScreen(where), true, true, true);
+	}
+
+private:
+	enum {
+		kTray = 'tray',
+		kOpen = 'open',
+		kRestart = 'rsta',
+		kRemove = 'remo',
+	};
+
+	void _Draw()
+	{
+		int32 size = (int32)Bounds().Height() + 1;
+		if (size < 8)
+			size = 16;
+		if (fIcon == NULL || fIcon->Bounds().IntegerHeight() + 1 != size) {
+			delete fIcon;
+			fIcon = new BBitmap(BRect(0, 0, size - 1, size - 1), B_RGBA32);
+		}
+		// ARGB in a u32 per pixel is B_RGBA32's layout on little-endian x86.
+		rd_icon(size, fHealth.String(), (unsigned int*)fIcon->Bits());
+	}
+
+	static status_t _Poll(void* data)
+	{
+		DeskbarView* view = (DeskbarView*)data;
+		BMessenger target(view);
+		while (!view->fQuit) {
+			BMessage state = Take(rd_tray());
+			state.what = kTray;
+			target.SendMessage(&state);
+			for (int i = 0; i < 50 && !view->fQuit; i++)
+				snooze(100000);
+		}
+		return B_OK;
+	}
+
+	static void _Detached(thread_func f)
+	{
+		thread_id t = spawn_thread(f, "retifs tray action", B_NORMAL_PRIORITY,
+			NULL);
+		resume_thread(t);
+	}
+
+	static status_t _Restart(void*)
+	{
+		rd_free(rd_service(kDaemonJob, "restart"));
+		return B_OK;
+	}
+
+	static status_t _Remove(void*)
+	{
+		BDeskbar().RemoveItem(kReplicantName);
+		return B_OK;
+	}
+
+	BBitmap* fIcon;
+	BString fHealth;
+	BStringList fLines;
+	thread_id fPoller;
+	volatile bool fQuit;
+};
+
+
+BArchivable*
+DeskbarView::Instantiate(BMessage* archive)
+{
+	if (!validate_instantiation(archive, "DeskbarView"))
+		return NULL;
+	return new DeskbarView(archive);
+}
+
+
+status_t
+DeskbarView::Archive(BMessage* data, bool deep) const
+{
+	status_t status = BView::Archive(data, deep);
+	if (status == B_OK)
+		status = data->AddString("add_on", kSignature);
+	if (status == B_OK)
+		status = data->AddString("class", "DeskbarView");
+	return status;
+}
+
+
+extern "C" _EXPORT BView*
+instantiate_deskbar_item(float maxWidth, float maxHeight)
+{
+	return new DeskbarView(BRect(0, 0, maxHeight - 1, maxHeight - 1));
+}
+
+
+/*!	Puts the replicant in the Deskbar, unless it is there already: Deskbar
+	loads it from this app's file, and keeps it there across restarts.
+*/
+static void
+InstallInDeskbar()
+{
+	BDeskbar deskbar;
+	// At login (the package's launch job) the Deskbar may not be up yet.
+	for (int i = 0; i < 30 && !deskbar.IsRunning(); i++)
+		snooze(1000000);
+	if (!deskbar.IsRunning() || deskbar.HasItem(kReplicantName))
+		return;
+	app_info info;
+	if (be_app->GetAppInfo(&info) == B_OK)
+		deskbar.AddItem(&info.ref);
+}
+
+
+// #pragma mark - App
+
+
 class RetifsApp : public BApplication {
 public:
 	RetifsApp()
 		:
-		BApplication(kSignature)
+		BApplication(kSignature),
+		fDeskbarOnly(false)
 	{
+	}
+
+	void ArgvReceived(int32 argc, char** argv)
+	{
+		for (int32 i = 1; i < argc; i++) {
+			if (strcmp(argv[i], "--deskbar") == 0)
+				fDeskbarOnly = true;
+		}
 	}
 
 	void ReadyToRun()
 	{
+		InstallInDeskbar();
+		if (fDeskbarOnly) {
+			Quit();
+			return;
+		}
 		(new RetifsWindow())->Show();
 	}
+
+private:
+	bool fDeskbarOnly;
 };
 
 

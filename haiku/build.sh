@@ -16,9 +16,16 @@ mkdir -p "$OUT/lib"
 # A new file, not the old one overwritten: a running app has it mapped.
 rm -f "${OUT:?}/lib/libretifs_desktop.so"
 cp target/release/libretifs_desktop.so "$OUT/lib/"
+# $ORIGIN/lib: the core is found next to the app also when Deskbar, not the
+# app, loads it (the replicant); -rdynamic: Deskbar finds the replicant's
+# Instantiate() among the app's exported symbols.
 g++ -O2 -std=c++17 -Wall -o "$OUT/retifs" "$HERE/app/RetifsApp.cpp" \
 	-I "$HERE/capi" -I /boot/system/develop/headers/private/shared \
-	-L "$OUT/lib" -lretifs_desktop -lbe -lshared
+	-L "$OUT/lib" -lretifs_desktop -lbe -lshared \
+	-Wl,-rpath,'$ORIGIN/lib' -rdynamic
+rc -o "$HERE/build/retifs.rsrc" "$HERE/app/retifs.rdef"
+xres -o "$OUT/retifs" "$HERE/build/retifs.rsrc"
+mimeset -f "$OUT/retifs"
 # The programs it manages, in its bin/ folder as a package has them (where they
 # are built: retifs next to retifs-desktop, Prns for Haiku next to it).
 for p in "$ROOT/../prnsd-haiku/prnsd/target/release/prnsd" \

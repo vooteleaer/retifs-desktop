@@ -26,6 +26,16 @@ unsafe fn arg(s: *const c_char) -> String {
     if s.is_null() { String::new() } else { unsafe { CStr::from_ptr(s) }.to_string_lossy().into_owned() }
 }
 
+/// Where the app is installed (its folder, with `bin/prnsd`), for when the
+/// program running isn't the app: the Deskbar replicant. Call it first.
+///
+/// # Safety
+/// `dir` is a NUL-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rd_set_app_dir(dir: *const c_char) {
+    device::set_install_dir(unsafe { arg(dir) }.into());
+}
+
 /// The daemon: up or not, the node, storage, libraries (JSON).
 #[unsafe(no_mangle)]
 pub extern "C" fn rd_status() -> *mut c_char {
@@ -109,6 +119,30 @@ pub unsafe extern "C" fn rd_save_settings(values: *const c_char) -> *mut c_char 
 pub unsafe extern "C" fn rd_service(name: *const c_char, action: *const c_char) -> *mut c_char {
     let (name, action) = unsafe { (arg(name), arg(action)) };
     result(device::service(&name, &action))
+}
+
+/// What the tray (Deskbar) icon shows: `{"health": "good"|"partly"|"down", "lines": [...]}`.
+#[unsafe(no_mangle)]
+pub extern "C" fn rd_tray() -> *mut c_char {
+    out(api::tray().to_string())
+}
+
+/// Draws the status icon, `size` × `size` ARGB pixels (alpha in the top
+/// byte), into `pixels`; `health` is "good", "partly" or "down".
+///
+/// # Safety
+/// `health` is a NUL-terminated string; `pixels` has room for size × size u32.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rd_icon(size: c_int, health: *const c_char, pixels: *mut u32) {
+    use retifs_desktop_core::status_icon::{Health, draw};
+    let Ok(size) = u32::try_from(size) else { return };
+    let h = match unsafe { arg(health) }.as_str() {
+        "good" => Health::Good,
+        "partly" => Health::Partly,
+        _ => Health::Down,
+    };
+    let icon = draw(size, h);
+    unsafe { std::ptr::copy_nonoverlapping(icon.as_ptr(), pixels, icon.len()) };
 }
 
 /// Frees a string this library returned.
