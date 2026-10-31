@@ -1,5 +1,5 @@
-//! What every retifs-desktop front end shares (GTK on Linux, Windows and
-//! Haiku later): talking to the local `retifsd` through `libretifs`.
+//! What every retifs-desktop front end shares (GTK on Linux, Windows, Android,
+//! Haiku): talking to the local `retifsd` through `libretifs`.
 //!
 //! The utility manages retifs (this node, storage, namespaces as units:
 //! members, sharing, what's kept where, devices); it doesn't browse or
@@ -9,6 +9,7 @@
 //! the result on its own UI thread. The core keeps no state of its own
 //! beyond the connection's runtime.
 
+pub mod api;
 pub mod device;
 pub mod status_icon;
 

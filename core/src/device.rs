@@ -46,7 +46,13 @@ pub fn prnsd() -> Option<PathBuf> {
     if let Some(p) = std::env::var_os("RETIFS_PRNSD").map(PathBuf::from).filter(|p| p.is_file()) {
         return Some(p);
     }
-    let bundled = if cfg!(windows) { install_dir().join("prnsd.exe") } else { PathBuf::from("/usr/lib/retifs/prnsd") };
+    let bundled = if cfg!(windows) {
+        install_dir().join("prnsd.exe")
+    } else if cfg!(target_os = "haiku") {
+        install_dir().join("bin").join("prnsd") // in the app's folder (bin/), as on Windows
+    } else {
+        PathBuf::from("/usr/lib/retifs/prnsd")
+    };
     if bundled.is_file() {
         return Some(bundled);
     }
@@ -151,7 +157,15 @@ fn reconfigure(args: &[&str]) -> Result<(), String> {
     }
     if service_state(BUNDLED).as_deref() == Some("active") {
         run_prnsd(args)?;
-        service(BUNDLED, "restart")
+        service(BUNDLED, "restart")?;
+        // retifsd doesn't attach to a new shared instance by itself (on
+        // Linux the unit is PartOf prnsd's): restarted after it.
+        #[cfg(target_os = "haiku")]
+        {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            service(RETIFSD, "restart")?;
+        }
+        Ok(())
     } else {
         let mut with = args.to_vec();
         with.push("--apply");
@@ -160,8 +174,10 @@ fn reconfigure(args: &[&str]) -> Result<(), String> {
 }
 
 /// The package's Reticulum service.
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "haiku")))]
 const BUNDLED: &str = "retifs-prnsd.service";
+#[cfg(target_os = "haiku")]
+const BUNDLED: &str = "x-vnd.retifs-prnsd";
 #[cfg(windows)]
 const BUNDLED: &str = "prnsd";
 
@@ -180,18 +196,22 @@ pub fn remove_interface(name: &str) -> Result<(), String> {
 }
 
 /// The user services the retifs package installs (Linux, systemd).
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "haiku")))]
 pub const SERVICES: &[(&str, &str)] = &[("retifsd.service", "retifs daemon"), ("retifs-prnsd.service", "Reticulum (bundled prnsd)"), ("retifs-gateway.service", "Libraries as local websites")];
 /// On Windows: the programs next to the utility, which it starts itself.
 #[cfg(windows)]
 pub const SERVICES: &[(&str, &str)] = &[("retifsd", "retifs daemon"), ("prnsd", "Reticulum (bundled prnsd)")];
+/// On Haiku: launch_daemon jobs of the user's (`~/config/settings/launch/retifs`,
+/// or a package's `data/user_launch`), started at login.
+#[cfg(target_os = "haiku")]
+pub const SERVICES: &[(&str, &str)] = &[("x-vnd.retifs-daemon", "retifs daemon"), ("x-vnd.retifs-prnsd", "Reticulum (bundled prnsd)")];
 
 /// The service retifs itself runs as.
 pub const RETIFSD: &str = SERVICES[0].0;
 
 /// A user service's state ("active", "inactive", "failed", …), None where
 /// there's no systemd.
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "haiku")))]
 pub fn service_state(unit: &str) -> Option<String> {
     let o = Command::new("systemctl").args(["--user", "is-active", unit]).output().ok()?;
     let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
@@ -199,13 +219,40 @@ pub fn service_state(unit: &str) -> Option<String> {
 }
 
 /// `start`, `stop` or `restart` a user service.
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "haiku")))]
 pub fn service(unit: &str, action: &str) -> Result<(), String> {
     let o = Command::new("systemctl").args(["--user", action, unit]).output().map_err(|e| e.to_string())?;
     if o.status.success() { Ok(()) } else { Err(first_line(&o.stderr, "systemctl failed")) }
 }
 
-/// Where the utility is installed, with the programs it starts (Windows).
+/// A launch_daemon job's state: "active" while it runs, "inactive" when it
+/// is known but not running, None when there's no such job.
+#[cfg(target_os = "haiku")]
+pub fn service_state(job: &str) -> Option<String> {
+    let o = Command::new("launch_roster").args(["info", job]).output().ok()?;
+    if !o.status.success() {
+        return None;
+    }
+    let info = String::from_utf8_lossy(&o.stdout);
+    Some(if job_running(&info) { "active" } else { "inactive" }.to_string())
+}
+
+/// Whether `launch_roster info` says the job runs (`running = bool(true)`).
+pub fn job_running(info: &str) -> bool {
+    info.lines().any(|l| {
+        let l = l.trim();
+        l.starts_with("running") && l.contains("bool(true)")
+    })
+}
+
+/// `start`, `stop` or `restart` a launch_daemon job.
+#[cfg(target_os = "haiku")]
+pub fn service(job: &str, action: &str) -> Result<(), String> {
+    let o = Command::new("launch_roster").args([action, job]).output().map_err(|e| e.to_string())?;
+    if o.status.success() { Ok(()) } else { Err(first_line(&o.stderr, "launch_roster failed")) }
+}
+
+/// Where the utility is installed, with the programs it starts (Windows, Haiku).
 pub fn install_dir() -> PathBuf {
     std::env::current_exe().ok().and_then(|p| p.parent().map(Path::to_path_buf)).unwrap_or_else(|| PathBuf::from("."))
 }
@@ -463,6 +510,13 @@ mod tests {
             Configured { name: "RTR-3".into(), kind: "TCPClientInterface".into(), enabled: true },
             Configured { name: "Hopspot USB".into(), kind: "PrnsUsbAuto".into(), enabled: false },
         ]);
+    }
+
+    #[test]
+    fn launch_roster_info() {
+        let running = "Details: BMessage(0x0) {\n        name = string(\"x-vnd.retifs-daemon\", 20 bytes)\n        running = bool(true)\n        launched = bool(true)\n";
+        assert!(job_running(running));
+        assert!(!job_running(&running.replace("running = bool(true)", "running = bool(false)")));
     }
 
     #[test]

@@ -870,6 +870,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
+name = "retifs-desktop-capi"
+version = "0.0.1"
+dependencies = [
+ "retifs-desktop-core",
+]
+
+[[package]]
 name = "retifs-desktop-core"
 version = "0.0.1"
 dependencies = [
@@ -897,7 +904,6 @@ version = "0.0.1"
 dependencies = [
  "jni",
  "retifs-desktop-core",
- "serde_json",
 ]
 
 [[package]]

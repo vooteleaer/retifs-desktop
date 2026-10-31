@@ -13,4 +13,3 @@ crate-type = ["cdylib"]
 [dependencies]
 retifs-desktop-core = { path = "../../core" }
 jni = { version = "0.21", default-features = false }
-serde_json = "1"
