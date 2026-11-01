@@ -186,22 +186,6 @@ const HAIKU_PRNSD_START: &str = "/boot/system/apps/Prns/prnsd-start";
 #[cfg(windows)]
 const BUNDLED: &str = "prnsd";
 
-/// A library just joined, as a volume (Haiku: in `~/retifs`, as the
-/// package's login job mounts them all); elsewhere mounting stays the user's
-/// choice. Best effort: the library is joined either way.
-pub fn mount_library(ns: &str) {
-    #[cfg(target_os = "haiku")]
-    {
-        let retifs = install_dir().join("bin/retifs");
-        let _ = Command::new(if retifs.is_file() { retifs } else { PathBuf::from("retifs") })
-            .args(["mount", ns])
-            .stdin(std::process::Stdio::null())
-            .output();
-    }
-    #[cfg(not(target_os = "haiku"))]
-    let _ = ns;
-}
-
 /// Adds a TCP connection to another Reticulum node.
 pub fn add_tcp(name: &str, host: &str, port: u16) -> Result<(), String> {
     let port = port.to_string();

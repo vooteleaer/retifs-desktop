@@ -44,8 +44,9 @@ retifsd, retifs), the `retifs` command on the PATH, the jobs in
 icon), the userlandfs module (`retifs-haikufs`, built in
 retifs) as `add-ons/userlandfs/retifs`, and the app in the Deskbar's
 Applications menu. It requires the `prns` package (prnsd, Reticulum).
-Libraries become volumes in `~/retifs/<library>` with `retifs mount --all`;
-the utility mounts one it joins. Not at login from a launch job: a
-userlandfs mount there blocked the user's launch_daemon (no desktop).
+Every library is a volume in `~/retifs/<library>`: retifsd mounts them once
+the desktop is up, a library joined later within seconds, and unmounts one
+left. Not at login from a launch job: a userlandfs mount there blocked the
+user's launch_daemon (no desktop).
 
 The store is `~/config/var/retifs` (libretifs' default on Haiku).
