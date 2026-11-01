@@ -37,5 +37,12 @@ for p in "$ROOT/../retifs/target/release/retifsd" "$ROOT/../retifs/target/releas
 		cp "$p" "$OUT/bin/"
 	fi
 done
+# Libraries as volumes: the userlandfs module (retifs-haikufs), when built.
+M="$ROOT/../retifs/target/release/libretifs_haikufs.so"
+if [ -f "$M" ]; then
+	mkdir -p "$OUT/add-ons"
+	rm -f "${OUT:?}/add-ons/retifs-haikufs"
+	cp "$M" "$OUT/add-ons/retifs-haikufs"
+fi
 echo "== $OUT"
 ls -la "$OUT" "$OUT/lib" "$OUT/bin"

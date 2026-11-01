@@ -21,6 +21,8 @@ char* rd_services(void);    /* [{"name", "what", "state"}] */
 char* rd_tray(void);       /* {"health": "good" | "partly" | "down", "lines": [...]} */
 
 char* rd_join(const char* address);
+/* Joins the library a retifs: link or invitation names: "" or the error. */
+char* rd_open_link(const char* link);
 char* rd_leave(const char* ns);
 char* rd_add_tcp(const char* name, const char* host, int port);
 char* rd_set_interface(const char* name, int enabled);

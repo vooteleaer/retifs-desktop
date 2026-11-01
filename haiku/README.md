@@ -41,7 +41,11 @@ mio has it in a release: prnsd-haiku carries it; retifsd is built with
 A system package: the app in `/boot/system/apps/retifs` (with `lib/` and `bin/`:
 retifsd, retifs), the `retifs` command on the PATH, the jobs in
 `data/user_launch/retifs` (at every login, and one that adds the Deskbar
-icon), and the app in the Deskbar's Applications menu. It requires the
-`prns` package (prnsd, Reticulum).
+icon), the userlandfs module (`retifs-haikufs`, built in
+retifs) as `add-ons/userlandfs/retifs`, and the app in the Deskbar's
+Applications menu. It requires the `prns` package (prnsd, Reticulum).
+Libraries become volumes in `~/retifs/<library>` with `retifs mount --all`;
+the utility mounts one it joins. Not at login from a launch job: a
+userlandfs mount there blocked the user's launch_daemon (no desktop).
 
 The store is `~/config/var/retifs` (libretifs' default on Haiku).

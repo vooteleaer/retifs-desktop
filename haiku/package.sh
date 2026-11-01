@@ -1,8 +1,11 @@
 #!/bin/sh
 # Makes the retifs package for Haiku (an hpkg) from the app folder
 # build.sh made: the app with its library, retifsd and the retifs command
-# (on the PATH), retifsd as a launch_daemon job at login, and an entry in
-# the Deskbar's Applications menu. Reticulum is the Prns package's (prnsd
+# (on the PATH), retifsd as a launch_daemon job at login, the userlandfs
+# module that makes each library a volume (in ~/retifs: retifs mount --all,
+# and the utility mounts a library it joins), and an entry in the Deskbar's
+# Applications menu. Not mounted by a login job: a userlandfs mount from one
+# blocked the user's launch_daemon, and the desktop never came up. Reticulum is the Prns package's (prnsd
 # with its own app and Deskbar icon), which this one requires.
 #
 #     haiku/build.sh && haiku/package.sh
@@ -15,17 +18,20 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/.." && pwd)
 APP=$HERE/build/retifs
 STAGE=$HERE/build/package
-VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' "$ROOT/Cargo.toml" | head -1)-3
+VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' "$ROOT/Cargo.toml" | head -1)-4
 ARCH=x86_64
 
-for f in retifs lib/libretifs_desktop.so bin/retifsd bin/retifs; do
+for f in retifs lib/libretifs_desktop.so bin/retifsd bin/retifs add-ons/retifs-haikufs; do
 	[ -f "$APP/$f" ] || { echo "missing $APP/$f: build it first" >&2; exit 1; }
 done
 
 rm -rf "${STAGE:?}"
 mkdir -p "$STAGE/apps" "$STAGE/bin" "$STAGE/data/user_launch" \
-	"$STAGE/data/deskbar/menu/Applications"
+	"$STAGE/data/deskbar/menu/Applications" "$STAGE/add-ons/userlandfs"
 cp -a "$APP" "$STAGE/apps/retifs"
+# The module where userlandfs looks for it, by the name mount -t userlandfs takes.
+mv "$STAGE/apps/retifs/add-ons/retifs-haikufs" "$STAGE/add-ons/userlandfs/retifs"
+rmdir "$STAGE/apps/retifs/add-ons"
 # A prnsd from an older build folder: Prns's package has it now.
 rm -f "$STAGE/apps/retifs/bin/prnsd"
 ln -s ../apps/retifs/bin/retifs "$STAGE/bin/retifs"

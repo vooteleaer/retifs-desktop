@@ -74,6 +74,13 @@ pub unsafe extern "C" fn rd_join(address: *const c_char) -> *mut c_char {
 }
 
 /// # Safety
+/// `link` is a NUL-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rd_open_link(link: *const c_char) -> *mut c_char {
+    result(api::open_link(&unsafe { arg(link) }).map(|_| ()))
+}
+
+/// # Safety
 /// `ns` is a NUL-terminated string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rd_leave(ns: *const c_char) -> *mut c_char {

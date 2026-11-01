@@ -32,7 +32,19 @@ pub fn join(address: &str) -> Result<String, String> {
     let d = Daemon::new();
     let all = d.heard()?;
     let l = all.into_iter().find(|l| l.address == address).ok_or("no longer heard")?;
-    d.join_heard(&l)
+    let ns = d.join_heard(&l)?;
+    device::mount_library(&ns);
+    Ok(ns)
+}
+
+/// Joins the library a `retifs:` link (or invitation) names, under the name
+/// it suggests: its local name.
+pub fn open_link(link: &str) -> Result<String, String> {
+    let d = Daemon::new();
+    let ns = Daemon::link_name(link)?;
+    d.open_link(link, &ns)?;
+    device::mount_library(&ns);
+    Ok(ns)
 }
 
 pub fn leave(ns: &str) -> Result<(), String> {

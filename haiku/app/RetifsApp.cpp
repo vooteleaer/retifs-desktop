@@ -54,6 +54,7 @@ enum {
 	kStop = 'stop',
 	kLeave = 'leav',
 	kJoin = 'join',
+	kOpenLink = 'olnk',
 	kEnable = 'enab',
 	kDisable = 'disa',
 	kRemove = 'remv',
@@ -175,6 +176,8 @@ public:
 					error = Result(rd_service(kDaemonJob, a.String()));
 				else if (op == "join")
 					error = Result(rd_join(a.String()));
+				else if (op == "open_link")
+					error = Result(rd_open_link(a.String()));
 				else if (op == "leave")
 					error = Result(rd_leave(a.String()));
 				else if (op == "enable" || op == "disable")
@@ -277,6 +280,14 @@ public:
 			case kJoin:
 				_Act("join", _Selected(fHeard, fHeardAddresses));
 				break;
+			case kOpenLink:
+			{
+				BString link(fLink->Text());
+				link.Trim();
+				_Act("open_link", link);
+				fLink->SetText("");
+				break;
+			}
 			case kEnable:
 				_Act("enable", _Selected(fConnections, fConnectionNames));
 				break;
@@ -316,6 +327,7 @@ private:
 		fUsage2 = new BStringView("usage2", "");
 		fLibraries = new BListView("libraries");
 		fHeard = new BListView("heard");
+		fLink = new BTextControl("Link", "A library's link (retifs:…)", "", NULL);
 
 		BView* view = new BView("This device", 0);
 		BLayoutBuilder::Group<>(view, B_VERTICAL)
@@ -342,6 +354,11 @@ private:
 			.AddGroup(B_HORIZONTAL)
 				.AddGlue()
 				.Add(new BButton("Join", new BMessage(kJoin)))
+			.End()
+			.Add(new BSeparatorView(B_HORIZONTAL))
+			.AddGroup(B_HORIZONTAL)
+				.Add(fLink)
+				.Add(new BButton("Add library", new BMessage(kOpenLink)))
 			.End();
 		return view;
 	}
@@ -580,6 +597,7 @@ private:
 	BStringView* fReticulum;
 	BListView* fConnections;
 	BStringList fConnectionNames;
+	BTextControl* fLink;
 	BTextControl* fName;
 	BTextControl* fHost;
 	BTextControl* fPort;
