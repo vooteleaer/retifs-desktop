@@ -39,8 +39,8 @@ pub struct Reticulum {
     pub error: Option<String>,
 }
 
-/// The prnsd to use: the one the retifs package bundles, one on the PATH,
-/// or (Windows) the managed one.
+/// The prnsd to use: the one the retifs package bundles, one on the PATH
+/// (Haiku: the Prns package's), or (Windows) the managed one.
 pub fn prnsd() -> Option<PathBuf> {
     // Where an app ships it itself (Android: among its native libraries).
     if let Some(p) = std::env::var_os("RETIFS_PRNSD").map(PathBuf::from).filter(|p| p.is_file()) {
@@ -49,7 +49,7 @@ pub fn prnsd() -> Option<PathBuf> {
     let bundled = if cfg!(windows) {
         install_dir().join("prnsd.exe")
     } else if cfg!(target_os = "haiku") {
-        install_dir().join("bin").join("prnsd") // in the app's folder (bin/), as on Windows
+        PathBuf::from(HAIKU_PRNSD)
     } else {
         PathBuf::from("/usr/lib/retifs/prnsd")
     };
@@ -177,7 +177,12 @@ fn reconfigure(args: &[&str]) -> Result<(), String> {
 #[cfg(not(any(windows, target_os = "haiku")))]
 const BUNDLED: &str = "retifs-prnsd.service";
 #[cfg(target_os = "haiku")]
-const BUNDLED: &str = "x-vnd.retifs-prnsd";
+const BUNDLED: &str = "x-vnd.prns-prnsd";
+/// On Haiku Reticulum is the Prns package's: prnsd, and its start script
+/// (which writes a new user's first configuration).
+const HAIKU_PRNSD: &str = "/boot/system/bin/prnsd";
+#[cfg(target_os = "haiku")]
+const HAIKU_PRNSD_START: &str = "/boot/system/apps/Prns/prnsd-start";
 #[cfg(windows)]
 const BUNDLED: &str = "prnsd";
 
@@ -202,9 +207,10 @@ pub const SERVICES: &[(&str, &str)] = &[("retifsd.service", "retifs daemon"), ("
 #[cfg(windows)]
 pub const SERVICES: &[(&str, &str)] = &[("retifsd", "retifs daemon"), ("prnsd", "Reticulum (bundled prnsd)")];
 /// On Haiku: launch_daemon jobs of the user's (`~/config/settings/launch/retifs`,
-/// or a package's `data/user_launch`), started at login.
+/// or a package's `data/user_launch`), started at login; Reticulum is the
+/// Prns package's.
 #[cfg(target_os = "haiku")]
-pub const SERVICES: &[(&str, &str)] = &[("x-vnd.retifs-daemon", "retifs daemon"), ("x-vnd.retifs-prnsd", "Reticulum (bundled prnsd)")];
+pub const SERVICES: &[(&str, &str)] = &[("x-vnd.retifs-daemon", "retifs daemon"), ("x-vnd.prns-prnsd", "Reticulum (Prns)")];
 
 /// The service retifs itself runs as.
 pub const RETIFSD: &str = SERVICES[0].0;
@@ -232,26 +238,27 @@ pub fn service(unit: &str, action: &str) -> Result<(), String> {
 #[cfg(target_os = "haiku")]
 pub fn service_state(job: &str) -> Option<String> {
     let o = Command::new("launch_roster").args(["info", job]).output().ok()?;
-    let running = if o.status.success() { job_running(&String::from_utf8_lossy(&o.stdout)) } else { !haiku_teams(job).is_empty() };
+    // The job's, or the program run here.
+    let running = (roster_ok(&o) && job_running(&String::from_utf8_lossy(&o.stdout))) || !haiku_teams(job).is_empty();
     Some(if running { "active" } else { "inactive" }.to_string())
 }
 
-/// A job's program in the install folder, and its arguments.
+/// A job's program: its name, what starts it, and the program that then
+/// runs (as `ps` shows it).
 #[cfg(target_os = "haiku")]
-fn job_program(job: &str) -> Option<(&'static str, &'static [&'static str])> {
+fn job_program(job: &str) -> Option<(&'static str, PathBuf, PathBuf)> {
     match job {
-        "x-vnd.retifs-daemon" => Some(("retifsd", &[])),
-        "x-vnd.retifs-prnsd" => Some(("prnsd", &["run"])),
+        "x-vnd.retifs-daemon" => Some(("retifsd", install_dir().join("bin/retifsd"), install_dir().join("bin/retifsd"))),
+        BUNDLED => Some(("prnsd", PathBuf::from(HAIKU_PRNSD_START), PathBuf::from(HAIKU_PRNSD))),
         _ => None,
     }
 }
 
-/// The teams running a job's program from the install folder.
+/// The teams running a job's program.
 #[cfg(target_os = "haiku")]
 fn haiku_teams(job: &str) -> Vec<String> {
-    let Some((prog, _)) = job_program(job) else { return Vec::new() };
-    let path = install_dir().join("bin").join(prog);
-    let path = path.to_string_lossy();
+    let Some((_, _, runs)) = job_program(job) else { return Vec::new() };
+    let path = runs.to_string_lossy();
     let Ok(o) = Command::new("ps").output() else { return Vec::new() };
     teams_running(&String::from_utf8_lossy(&o.stdout), &path)
 }
@@ -273,7 +280,7 @@ pub fn teams_running(ps: &str, path: &str) -> Vec<String> {
 /// its output in `~/config/var/log/retifs/<program>.log`.
 #[cfg(target_os = "haiku")]
 fn run_program(job: &str, action: &str) -> Result<(), String> {
-    let (prog, args) = job_program(job).ok_or_else(|| format!("no job {job}"))?;
+    let (prog, starts, _) = job_program(job).ok_or_else(|| format!("no job {job}"))?;
     if action == "stop" || action == "restart" {
         for team in haiku_teams(job) {
             let _ = Command::new("kill").arg(&team).output();
@@ -288,7 +295,7 @@ fn run_program(job: &str, action: &str) -> Result<(), String> {
             return Err("another Reticulum runs on this machine already".into());
         }
         // Reticulum first, as the job requires it.
-        if prog == "retifsd" && !shared_instance_up() && install_dir().join("bin/prnsd").is_file() {
+        if prog == "retifsd" && !shared_instance_up() && Path::new(HAIKU_PRNSD_START).is_file() {
             run_program(BUNDLED, "start")?;
             for _ in 0..30 {
                 if shared_instance_up() {
@@ -300,8 +307,7 @@ fn run_program(job: &str, action: &str) -> Result<(), String> {
         let logs = PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join("config/var/log/retifs");
         std::fs::create_dir_all(&logs).map_err(|e| e.to_string())?;
         let log = std::fs::OpenOptions::new().create(true).append(true).open(logs.join(format!("{prog}.log"))).map_err(|e| e.to_string())?;
-        Command::new(install_dir().join("bin").join(prog))
-            .args(args)
+        Command::new(&starts)
             .stdin(std::process::Stdio::null())
             .stdout(log.try_clone().map_err(|e| e.to_string())?)
             .stderr(log)
@@ -323,12 +329,39 @@ pub fn job_running(info: &str) -> bool {
 /// launch_daemon doesn't know it yet, its program.
 #[cfg(target_os = "haiku")]
 pub fn service(job: &str, action: &str) -> Result<(), String> {
-    let known = Command::new("launch_roster").args(["info", job]).output().is_ok_and(|o| o.status.success());
+    if action == "restart" {
+        service(job, "stop")?;
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        return service(job, "start");
+    }
+    let known = Command::new("launch_roster").args(["info", job]).output().is_ok_and(|o| roster_ok(&o));
     if !known {
         return run_program(job, action);
     }
     let o = Command::new("launch_roster").args([action, job]).output().map_err(|e| e.to_string())?;
-    if o.status.success() { Ok(()) } else { Err(first_line(&o.stderr, "launch_roster failed")) }
+    if !roster_ok(&o) {
+        return Err(first_line(&o.stderr, "launch_roster failed"));
+    }
+    if action == "stop" {
+        // And one run here, if any.
+        return run_program(job, "stop");
+    }
+    // A job known from an older install (one that requires a job no longer
+    // there) "starts" and doesn't run: then the program, run here.
+    for _ in 0..10 {
+        if service_state(job).as_deref() == Some("active") {
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+    run_program(job, "start")
+}
+
+/// Whether launch_roster did it: it exits with 0 also when it didn't (an
+/// unknown job: "Name not found"), saying so only on stderr.
+#[cfg(target_os = "haiku")]
+fn roster_ok(o: &std::process::Output) -> bool {
+    o.status.success() && o.stderr.iter().all(u8::is_ascii_whitespace)
 }
 
 static INSTALL_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
@@ -556,11 +589,243 @@ pub fn shown_value(v: &str) -> String {
     v.trim().trim_matches('"').to_string()
 }
 
+/// The settings that are sizes: retifsd reads them as `250G`, `500M`
+/// (binary units); the utility shows and takes `250 GB`, `500 MB`.
+pub const SIZE_SETTINGS: [&str; 3] = ["max_store", "min_free", "hold_for_others"];
+
+pub fn is_size(key: &str) -> bool {
+    SIZE_SETTINGS.contains(&key)
+}
+
+const KIB: u64 = 1 << 10;
+const MIB: u64 = 1 << 20;
+const GIB: u64 = 1 << 30;
+const TIB: u64 = 1 << 40;
+
+/// A size as typed (`250 GB`, `250gb`, `250G`, `1,5 TB`, `500 MB`, `0`; a
+/// bare number is in GB) as retifsd reads it (`250G`, `1.5T`, `500M`, `0`).
+/// None if it isn't one.
+pub fn size_typed(typed: &str) -> Option<String> {
+    let t = typed.trim().replace(',', ".").to_ascii_uppercase();
+    let split = t.find(|c: char| !(c.is_ascii_digit() || c == '.')).unwrap_or(t.len());
+    let (num, unit) = (t[..split].trim(), t[split..].trim());
+    let n: f64 = num.parse().ok().filter(|n: &f64| n.is_finite() && *n >= 0.0)?;
+    let unit = match unit.trim_end_matches("IB").trim_end_matches('B') {
+        "" if unit.is_empty() => "G",
+        "" => "",
+        "K" => "K",
+        "M" => "M",
+        "G" => "G",
+        "T" => "T",
+        _ => return None,
+    };
+    let num = if n.fract() == 0.0 { format!("{}", n as u64) } else { format!("{n}") };
+    Some(if n == 0.0 { "0".into() } else { format!("{num}{unit}") })
+}
+
+/// A size as retifsd reads it (`250G`) in bytes, as retifsd counts them.
+pub fn size_bytes(v: &str) -> Option<u64> {
+    let v = v.trim().trim_matches('"').to_ascii_uppercase();
+    let (num, mult) = match v.chars().last() {
+        Some('K') => (&v[..v.len() - 1], KIB),
+        Some('M') => (&v[..v.len() - 1], MIB),
+        Some('G') => (&v[..v.len() - 1], GIB),
+        Some('T') => (&v[..v.len() - 1], TIB),
+        _ => (&v[..], 1),
+    };
+    num.parse::<f64>().ok().map(|n| (n * mult as f64) as u64)
+}
+
+/// A size from retifsd's form (`250G`) as the user reads it (`250 GB`).
+pub fn size_shown(v: &str) -> String {
+    let v = v.trim().trim_matches('"');
+    match v.chars().last().map(|c| c.to_ascii_uppercase()) {
+        Some(u @ ('K' | 'M' | 'G' | 'T')) => format!("{} {u}B", &v[..v.len() - 1]),
+        _ if v == "0" => "0".into(),
+        _ => match v.parse::<u64>() {
+            Ok(n) => bytes_shown(n),
+            Err(_) => v.to_string(),
+        },
+    }
+}
+
+/// Bytes as a round size to show, as the utility shows usage: TB with one
+/// decimal from 1 TB, whole GB from 10 GB, GB with one decimal from 1 GB, MB
+/// below.
+pub fn bytes_shown(n: u64) -> String {
+    let n = n as f64;
+    if n >= TIB as f64 {
+        format!("{:.1} TB", n / TIB as f64)
+    } else if n >= 10.0 * GIB as f64 {
+        format!("{:.0} GB", n / GIB as f64)
+    } else if n >= GIB as f64 {
+        format!("{:.1} GB", n / GIB as f64)
+    } else {
+        format!("{:.0} MB", n / MIB as f64)
+    }
+}
+
+/// The machine's name as retifsd takes it for the device's (lower case).
+fn hostname() -> String {
+    std::env::var("COMPUTERNAME")
+        .or_else(|_| std::env::var("HOSTNAME"))
+        .ok()
+        .or_else(|| std::fs::read_to_string("/etc/hostname").ok())
+        // Haiku has neither: its `hostname` says.
+        .or_else(|| Command::new("hostname").output().ok().map(|o| String::from_utf8_lossy(&o.stdout).into_owned()))
+        .map(|h| h.trim().to_lowercase())
+        .filter(|h| !h.is_empty())
+        .unwrap_or_else(|| "this-device".into())
+}
+
+/// The size of the disk the store is on (of its nearest existing folder).
+fn disk_total(store: &Path) -> Option<u64> {
+    let mut p = Some(store);
+    while let Some(dir) = p {
+        if dir.exists() {
+            return fs4::total_space(dir).ok();
+        }
+        p = dir.parent();
+    }
+    None
+}
+
+/// What retifsd takes for a setting left at its default, here (as shown):
+/// the store limit is half the disk, at least 10 % of it (5 GB at least) is
+/// left free, others' copies are held up to the store limit, 3 copies, the
+/// machine's name. None where there's no value (a site).
+pub fn setting_default(store: &Path, key: &str) -> Option<String> {
+    let total = disk_total(store);
+    match key {
+        "max_store" | "hold_for_others" => total.map(|t| bytes_shown(t / 2)),
+        "min_free" => total.map(|t| bytes_shown((t / 10).max(5 * GIB))),
+        "min_copies" => Some("3".into()),
+        "device" => Some(hostname()),
+        "no_storage" => Some("false".into()),
+        _ => None,
+    }
+}
+
+/// A setting as a front end shows it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SettingView {
+    pub section: &'static str,
+    pub key: &'static str,
+    pub what: &'static str,
+    /// What the field holds: the file's value, else the default this machine
+    /// gets (so no field is empty where there is one); sizes with their unit.
+    pub value: String,
+    pub default: Option<String>,
+    /// Whether the file sets it (else it's the default).
+    pub set: bool,
+    /// The unit to show by the field ("GB, MB or TB", "copies"), or "".
+    pub unit: &'static str,
+}
+
+/// The settings of the store's `retifs.toml`, as the front ends show them.
+pub fn settings_view(store: &Path) -> Vec<SettingView> {
+    let text = std::fs::read_to_string(settings_file(store)).unwrap_or_default();
+    SETTINGS
+        .iter()
+        .map(|&(section, key, what)| {
+            let set = get_setting(&text, section, key).map(|v| if is_size(key) { size_shown(&v) } else { shown_value(&v) });
+            let default = setting_default(store, key);
+            SettingView {
+                section,
+                key,
+                what,
+                value: set.clone().or_else(|| default.clone()).unwrap_or_default(),
+                default,
+                set: set.is_some(),
+                unit: match key {
+                    k if is_size(k) => "GB, MB or TB",
+                    "min_copies" => "copies",
+                    _ => "",
+                },
+            }
+        })
+        .collect()
+}
+
+/// Saves what the fields hold, `(section, key, typed)` (a switch: "true" or
+/// ""): only what changed is written, and a field left at its default stays
+/// the default. Sizes are taken with units (`250 GB`) and written as retifsd
+/// reads them (`250G`). The caller restarts the daemon.
+pub fn save_typed(store: &Path, typed: &[(&str, &str, String)]) -> Result<(), String> {
+    let path = settings_file(store);
+    let mut text = std::fs::read_to_string(&path).unwrap_or_default();
+    for &(section, key, what) in SETTINGS.iter() {
+        let Some((_, _, t)) = typed.iter().find(|(s, k, _)| *s == section && *k == key) else { continue };
+        let default = setting_default(store, key);
+        let now = typed_setting(key, what, t, default.as_deref())?;
+        if get_setting(&text, section, key) != now {
+            text = set_setting(&text, section, key, now.as_deref());
+        }
+    }
+    std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// A typed setting as the file holds it, None when it is the default (the
+/// file then leaves it commented out, and retifsd keeps deriving it); an
+/// error for a size that isn't one.
+pub fn typed_setting(key: &str, what: &str, typed: &str, default: Option<&str>) -> Result<Option<String>, String> {
+    let typed = typed.trim();
+    if typed.is_empty() {
+        return Ok(None);
+    }
+    if is_size(key) {
+        let v = size_typed(typed).ok_or_else(|| format!("{what}: \"{typed}\" isn't a size (like 250 GB, 500 MB or 1.5 TB)"))?;
+        let same = default.and_then(size_typed).is_some_and(|d| d == v);
+        return Ok((!same).then(|| toml_value(&v)));
+    }
+    if default.is_some_and(|d| d == typed) {
+        return Ok(None);
+    }
+    Ok(Some(toml_value(typed)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     const FILE: &str = "# retifs node settings.\n\n[store]\n# max_store = \"...\"          # store limit\n# no_storage = false         # keep nothing\n\n[node]\n# device = \"...\"             # this device's name\n";
+
+    #[test]
+    fn sizes_are_shown_and_typed_with_units() {
+        assert_eq!(size_typed("250 GB").as_deref(), Some("250G"));
+        assert_eq!(size_typed("250gb").as_deref(), Some("250G"));
+        assert_eq!(size_typed("250G").as_deref(), Some("250G"));
+        assert_eq!(size_typed("1,5 TB").as_deref(), Some("1.5T"));
+        assert_eq!(size_typed("500 MiB").as_deref(), Some("500M"));
+        assert_eq!(size_typed("250").as_deref(), Some("250G"), "a bare number is GB");
+        assert_eq!(size_typed("0 GB").as_deref(), Some("0"));
+        assert_eq!(size_typed("lots"), None);
+        assert_eq!(size_typed("5 PB"), None);
+        assert_eq!(size_shown("\"250G\""), "250 GB");
+        assert_eq!(size_shown("1.5T"), "1.5 TB");
+        assert_eq!(size_shown("0"), "0");
+        assert_eq!(size_bytes("\"2G\""), Some(2 << 30));
+        assert_eq!(bytes_shown(500 << 30), "500 GB");
+        assert_eq!(bytes_shown((20 << 40) + (3 << 39)), "21.5 TB");
+        assert_eq!(bytes_shown(300 << 20), "300 MB");
+        assert_eq!(bytes_shown((20 << 30) - (40 << 20)), "20 GB", "as the usage line shows it");
+        assert_eq!(bytes_shown(5 << 30), "5.0 GB");
+        // A default shown and saved as it is stays the default.
+        assert_eq!(size_typed("5.0 GB"), size_typed("5 GB"));
+    }
+
+    #[test]
+    fn a_default_typed_stays_a_default() {
+        let size = |t| typed_setting("max_store", "Store limit", t, Some("237 GB"));
+        assert_eq!(size("237 GB"), Ok(None), "the default shown, saved: still the default");
+        assert_eq!(size("237G"), Ok(None));
+        assert_eq!(size("100 GB"), Ok(Some("\"100G\"".into())));
+        assert_eq!(size(""), Ok(None));
+        assert!(size("much").unwrap_err().contains("isn't a size"));
+        assert_eq!(typed_setting("min_copies", "", "3", Some("3")), Ok(None));
+        assert_eq!(typed_setting("min_copies", "", "2", Some("3")), Ok(Some("2".into())));
+        assert_eq!(typed_setting("site", "", "kodu", None), Ok(Some("\"kodu\"".into())));
+    }
 
     #[test]
     fn settings_are_set_and_put_back_with_their_comments() {

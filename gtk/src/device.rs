@@ -1,7 +1,7 @@
 //! This device: Reticulum and its connections, the services, and the node's
 //! settings. What a tester needs to get a fresh install talking to others.
 
-use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc};
+use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 use adw::prelude::*;
 use gtk::glib;
@@ -21,8 +21,6 @@ pub struct DevicePage {
     services: Vec<(&'static str, &'static str, adw::ActionRow)>,
     settings: Vec<(&'static str, &'static str, gtk::Widget)>,
     save: gtk::Button,
-    /// What the file said when last read: only changes are written.
-    loaded: RefCell<HashMap<(String, String), Option<String>>>,
 }
 
 impl DevicePage {
@@ -55,15 +53,17 @@ impl DevicePage {
         let save = gtk::Button::builder().label("Save and restart").valign(gtk::Align::Center).css_classes(["suggested-action"]).sensitive(false).build();
         let set_group = adw::PreferencesGroup::builder()
             .title("Settings")
-            .description("This node's retifs.toml. Empty means the default.")
+            .description("This node's retifs.toml, filled with the defaults this device gets until you change them.")
             .header_suffix(&save)
             .build();
         let mut settings = Vec::new();
-        for (section, key, what) in device::SETTINGS {
+        for s in device::settings_view(daemon.store()) {
+            let (section, key) = (s.section, s.key);
+            let title = if s.unit.is_empty() { s.what.to_string() } else { format!("{} ({})", s.what, s.unit) };
             let w: gtk::Widget = if key == "no_storage" {
-                adw::SwitchRow::builder().title(what).build().upcast()
+                adw::SwitchRow::builder().title(s.what).build().upcast()
             } else {
-                adw::EntryRow::builder().title(what).build().upcast()
+                adw::EntryRow::builder().title(title).build().upcast()
             };
             set_group.add(&w);
             settings.push((section, key, w));
@@ -79,7 +79,6 @@ impl DevicePage {
             services,
             settings,
             save: save.clone(),
-            loaded: RefCell::new(HashMap::new()),
         });
         for (unit, _, row) in &me.services {
             for (icon, action, tip) in [("media-playback-start-symbolic", "start", "Start"), ("view-refresh-symbolic", "restart", "Restart"), ("media-playback-stop-symbolic", "stop", "Stop")] {
@@ -242,15 +241,13 @@ impl DevicePage {
     }
 
     fn load_settings(&self) {
-        let text = std::fs::read_to_string(device::settings_file(self.daemon.store())).unwrap_or_default();
-        let mut loaded = self.loaded.borrow_mut();
+        let views = device::settings_view(self.daemon.store());
         for (section, key, w) in &self.settings {
-            let v = device::get_setting(&text, section, key);
-            loaded.insert((section.to_string(), key.to_string()), v.clone());
+            let Some(v) = views.iter().find(|v| v.section == *section && v.key == *key) else { continue };
             if let Some(e) = w.downcast_ref::<adw::EntryRow>() {
-                e.set_text(&v.as_deref().map(device::shown_value).unwrap_or_default());
+                e.set_text(&v.value);
             } else if let Some(s) = w.downcast_ref::<adw::SwitchRow>() {
-                s.set_active(v.as_deref() == Some("true"));
+                s.set_active(v.value == "true");
             }
         }
         self.save.set_sensitive(false);
@@ -258,24 +255,22 @@ impl DevicePage {
 
     /// Writes the settings that changed and restarts the daemon to use them.
     fn save_settings(self: &Rc<Self>) {
-        let path = device::settings_file(self.daemon.store());
-        let mut text = std::fs::read_to_string(&path).unwrap_or_default();
-        let loaded = self.loaded.borrow().clone();
-        for (section, key, w) in &self.settings {
-            let now: Option<String> = if let Some(e) = w.downcast_ref::<adw::EntryRow>() {
-                let t = e.text().trim().to_string();
-                (!t.is_empty()).then(|| device::toml_value(&t))
-            } else if let Some(s) = w.downcast_ref::<adw::SwitchRow>() {
-                s.is_active().then(|| "true".to_string())
-            } else {
-                None
-            };
-            if loaded.get(&(section.to_string(), key.to_string())).cloned().flatten() != now {
-                text = device::set_setting(&text, section, key, now.as_deref());
-            }
-        }
-        if let Err(e) = std::fs::write(&path, text) {
-            self.shared.set_subtitle(&format!("{}: {e}", path.display()));
+        let typed: Vec<(&str, &str, String)> = self
+            .settings
+            .iter()
+            .map(|(section, key, w)| {
+                let t = if let Some(e) = w.downcast_ref::<adw::EntryRow>() {
+                    e.text().to_string()
+                } else if let Some(s) = w.downcast_ref::<adw::SwitchRow>() {
+                    if s.is_active() { "true".into() } else { String::new() }
+                } else {
+                    String::new()
+                };
+                (*section, *key, t)
+            })
+            .collect();
+        if let Err(e) = device::save_typed(self.daemon.store(), &typed) {
+            self.shared.set_subtitle(&e);
             return;
         }
         self.load_settings();

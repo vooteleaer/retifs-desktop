@@ -309,7 +309,7 @@ fun SettingsView(said: (String) -> Unit) {
         }
     }
     LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        item { Text("This node's retifs.toml. Empty means the default.", style = MaterialTheme.typography.bodySmall) }
+        item { Text("This node's retifs.toml, filled with the defaults this device gets until you change them.", style = MaterialTheme.typography.bodySmall) }
         items((0 until list.length()).map { list.getJSONObject(it) }) { s ->
             val id = "${s.getString("section")}.${s.getString("key")}"
             if (s.optBoolean("switch")) {
@@ -318,7 +318,9 @@ fun SettingsView(said: (String) -> Unit) {
                     Switch(checked = values[id] == "true", onCheckedChange = { values[id] = if (it) "true" else "" })
                 }
             } else {
-                OutlinedTextField(values[id] ?: "", { values[id] = it }, label = { Text(s.getString("what")) }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                val unit = s.optString("unit", "")
+                OutlinedTextField(values[id] ?: "", { values[id] = it }, label = { Text(s.getString("what")) }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+                    suffix = if (unit.isNotEmpty()) ({ Text(unit) }) else null)
             }
         }
         item {

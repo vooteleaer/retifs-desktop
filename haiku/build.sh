@@ -27,9 +27,10 @@ rc -o "$HERE/build/retifs.rsrc" "$HERE/app/retifs.rdef"
 xres -o "$OUT/retifs" "$HERE/build/retifs.rsrc"
 mimeset -f "$OUT/retifs"
 # The programs it manages, in its bin/ folder as a package has them (where they
-# are built: retifs next to retifs-desktop, Prns for Haiku next to it).
-for p in "$ROOT/../prnsd-haiku/prnsd/target/release/prnsd" \
-		"$ROOT/../retifs/target/release/retifsd" "$ROOT/../retifs/target/release/retifs"; do
+# are built: retifs next to retifs-desktop). Reticulum is Prns's own package
+# (prnsd-haiku's haiku/).
+rm -f "${OUT:?}/bin/prnsd"
+for p in "$ROOT/../retifs/target/release/retifsd" "$ROOT/../retifs/target/release/retifs"; do
 	if [ -f "$p" ]; then
 		mkdir -p "$OUT/bin"
 		rm -f "${OUT:?}/bin/$(basename "$p")"	# a running one keeps its old file

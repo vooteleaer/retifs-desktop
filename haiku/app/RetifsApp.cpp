@@ -410,11 +410,18 @@ private:
 					s.GetString("what", ""), value, NULL);
 				grid->AddItem(field->CreateLabelLayoutItem(), 0, i);
 				grid->AddItem(field->CreateTextViewLayoutItem(), 1, i);
+				BString unit = s.GetString("unit", "");
+				if (!unit.IsEmpty()) {
+					BStringView* label = new BStringView(NULL, unit.String());
+					label->SetHighUIColor(B_PANEL_TEXT_COLOR, B_LIGHTEN_1_TINT);
+					grid->AddView(label, 2, i);
+				}
 			}
 			fSettingKeys.Add(key);
 		}
 		layout.Add(new BStringView("hint",
-			"Empty: the default. Saving restarts retifs."))
+			"Filled with the defaults this device gets until you change "
+			"them. Saving restarts retifs."))
 			.AddGroup(B_HORIZONTAL)
 				.AddGlue()
 				.Add(new BButton("Save", new BMessage(kSave)))
@@ -632,7 +639,7 @@ public:
 		BView::AttachedToWindow();
 		AdoptParentColors();
 		// In the Deskbar's process the core can't tell the app's folder (and
-		// the bundled prnsd in it) from the program running: say it.
+		// retifsd in it) from the program running: say it.
 		entry_ref ref;
 		BPath app, folder;
 		if (be_roster->FindApp(kSignature, &ref) == B_OK

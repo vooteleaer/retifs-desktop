@@ -7,7 +7,7 @@ One retifs (the same Rust daemon, `retifsd`, and the same transport, Prns) and o
 | **Linux** | runs (amd64, arm64) | bundled prnsd, or the machine's | GTK 4 / libadwaita, tray (StatusNotifierItem) | FUSE mount | .deb (retifs amd64+arm64, utility amd64) |
 | **Windows** | runs | bundled prnsd, or the user's | Win32, notification area | Cloud Files | retifs-setup.exe (per user) |
 | **Android** | runs (emulator, x86_64; aarch64 builds) | bundled prnsd, TCP shared instance | Kotlin + Compose, foreground service | — (DocumentsProvider planned) | debug APK (`android/build-apk.ps1`) |
-| **Haiku** | runs (x86_64, native build) | prnsd runs (the prnsd-haiku fork) | Haiku API (BeAPI) window; Deskbar replicant planned | userlandfs module (retifs-haikufs): attributes, queries | hpkg (`haiku/package.sh`), system package |
+| **Haiku** | runs (x86_64, native build) | the Prns package (prnsd-haiku: prnsd, its app and Deskbar icon) | Haiku API (BeAPI) window, Deskbar replicant | userlandfs module (retifs-haikufs): attributes, queries | hpkg (`haiku/package.sh`), system package |
 
 ## Linux
 Done: the `retifs` .deb for amd64 and arm64 (glibc 2.36+: Debian 12, Ubuntu 22.04, Raspberry Pi OS bookworm), prnsd bundled and started only where no Reticulum runs; the utility's .deb for amd64 (GTK 4.12+, libadwaita 1.4+: Debian 13, Ubuntu 24.04), in the tray from login.

@@ -371,14 +371,13 @@ unsafe fn build(hwnd: HWND, icons: [HICON; 3]) {
     // Settings.
     let mut edits = Vec::new();
     let mut settings_page = Vec::new();
-    for (section, key, what) in device::SETTINGS {
-        let l = label(what);
+    for s in device::settings_view(&retifs_desktop_core::default_store()) {
+        let (section, key) = (s.section, s.key);
+        let l = if s.unit.is_empty() { label(s.what) } else { label(&format!("{} ({})", s.what, s.unit)) };
         let e = if key == "no_storage" {
             child(hwnd, WC_BUTTONW, "Yes", WS_TABSTOP | WINDOW_STYLE(BS_AUTOCHECKBOX as u32), 0, font)
         } else {
-            let h = child(hwnd, WC_EDITW, "", WS_BORDER | WS_TABSTOP | WINDOW_STYLE(ES_AUTOHSCROLL as u32), 0, font);
-            SendMessageW(h, EM_SETCUEBANNER, WPARAM(0), LPARAM(w!("default").as_ptr() as isize));
-            h
+            child(hwnd, WC_EDITW, "", WS_BORDER | WS_TABSTOP | WINDOW_STYLE(ES_AUTOHSCROLL as u32), 0, font)
         };
         settings_page.push(l);
         settings_page.push(e);
@@ -593,23 +592,18 @@ unsafe fn refreshed() {
     });
 }
 
-fn settings_text() -> (std::path::PathBuf, String) {
-    let path = device::settings_file(&retifs_desktop_core::default_store());
-    let text = std::fs::read_to_string(&path).unwrap_or_default();
-    (path, text)
-}
-
+/// Fills the fields: the file's values, else the defaults this device gets.
 unsafe fn load_settings() {
-    let (_, text) = settings_text();
+    let views = device::settings_view(&retifs_desktop_core::default_store());
     UI.with(|u| {
         let u = u.borrow();
         let Some(u) = u.as_ref() else { return };
         for (section, key, _, e) in &u.edits {
-            let v = device::get_setting(&text, section, key);
+            let Some(v) = views.iter().find(|v| v.section == *section && v.key == *key) else { continue };
             if *key == "no_storage" {
-                SendMessageW(*e, BM_SETCHECK, WPARAM(if v.as_deref() == Some("true") { 1 } else { 0 }), LPARAM(0));
+                SendMessageW(*e, BM_SETCHECK, WPARAM(if v.value == "true" { 1 } else { 0 }), LPARAM(0));
             } else {
-                set_text(*e, &v.as_deref().map(device::shown_value).unwrap_or_default());
+                set_text(*e, &v.value);
             }
         }
     });
@@ -617,24 +611,23 @@ unsafe fn load_settings() {
 
 /// Writes the settings that changed, then restarts retifs to use them.
 unsafe fn save_settings() {
-    let (path, mut text) = settings_text();
-    UI.with(|u| {
+    let typed: Vec<(&str, &str, String)> = UI.with(|u| {
         let u = u.borrow();
-        let Some(u) = u.as_ref() else { return };
-        for (section, key, _, e) in &u.edits {
-            let now = if *key == "no_storage" {
-                (SendMessageW(*e, BM_GETCHECK, WPARAM(0), LPARAM(0)).0 == 1).then(|| "true".to_string())
-            } else {
-                let t = text_of(*e).trim().to_string();
-                (!t.is_empty()).then(|| device::toml_value(&t))
-            };
-            if device::get_setting(&text, section, key) != now {
-                text = device::set_setting(&text, section, key, now.as_deref());
-            }
-        }
+        let Some(u) = u.as_ref() else { return Vec::new() };
+        u.edits
+            .iter()
+            .map(|(section, key, _, e)| {
+                let t = if *key == "no_storage" {
+                    if SendMessageW(*e, BM_GETCHECK, WPARAM(0), LPARAM(0)).0 == 1 { "true".to_string() } else { String::new() }
+                } else {
+                    text_of(*e)
+                };
+                (*section, *key, t)
+            })
+            .collect()
     });
-    if let Err(e) = std::fs::write(&path, text) {
-        note(format!("{}: {e}", path.display()));
+    if let Err(e) = device::save_typed(&retifs_desktop_core::default_store(), &typed) {
+        note(e);
         return;
     }
     load_settings();

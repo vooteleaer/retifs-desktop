@@ -1,14 +1,10 @@
-# retifs as the user's launch_daemon jobs: Reticulum (the bundled prnsd, where
-# no other runs) and the retifs daemon, both at login. A package puts this in
-# data/user_launch/ (every user) with its own paths; by hand, copy it to
+# retifs as the user's launch_daemon job: the retifs daemon at login, after
+# Reticulum (x-vnd.prns-prnsd, the Prns package's prnsd). A package puts this
+# in data/user_launch/ (every user) with its own paths; by hand, copy it to
 # ~/config/settings/launch/retifs with APP replaced by the app folder, then
 # log in again.
 
-job x-vnd.retifs-prnsd {
-	launch APP/bin/prnsd run
-}
-
 job x-vnd.retifs-daemon {
 	launch APP/bin/retifsd
-	requires x-vnd.retifs-prnsd
+	requires x-vnd.prns-prnsd
 }

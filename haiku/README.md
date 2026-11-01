@@ -8,9 +8,11 @@ its storage, libraries, libraries heard on the network), the network
   (`retifs_desktop.h`).
 - `app/`: the BeAPI app over it; `BJson` reads the answers into BMessages,
   and the core's blocking calls run in a looper of their own.
-- `launch/retifs`: retifs and Reticulum as launch_daemon jobs
-  (`x-vnd.retifs-daemon`, `x-vnd.retifs-prnsd`); the utility starts, stops and
-  restarts them with `launch_roster`.
+- `launch/retifs`: retifs as a launch_daemon job (`x-vnd.retifs-daemon`),
+  after Reticulum: the Prns package's prnsd (`x-vnd.prns-prnsd`, with Prns's
+  own app and Deskbar icon; prnsd-haiku's `haiku/`). The utility starts,
+  stops and restarts both with `launch_roster`, or (right after installing,
+  before the launch_daemon has read the jobs at a login) runs them itself.
 - The Deskbar replicant (in the app): the shared status icon in the tray, its
   state from a thread of its own, a menu with the state, Open, Restart and
   Remove. The app adds it when it starts (`retifs --deskbar` only adds it);
@@ -22,12 +24,12 @@ its storage, libraries, libraries heard on the network), the network
     pkgman install rust_bin gcc haiku_devel
     haiku/build.sh
 
-with retifs next to retifs-desktop, and the Haiku branch of Prns
-(`prnsd-haiku`) for prnsd. The result is an app folder,
+with retifs next to retifs-desktop. The result is an app folder,
 `haiku/build/retifs`: `retifs` (the app), `lib/libretifs_desktop.so`, and
-`bin/` with prnsd, retifsd and the `retifs` command when they are built.
+`bin/` with retifsd and the `retifs` command when they are built. prnsd is
+the Prns package's (prnsd-haiku: `haiku/build.sh && haiku/package.sh`).
 
-retifsd and prnsd need mio with Haiku's accept fix (tokio-rs/mio#2036) until
+retifsd needs mio with Haiku's accept fix (tokio-rs/mio#2036) until
 mio has it in a release: prnsd-haiku carries it; retifsd is built with
 `--config 'patch.crates-io.mio.path="…/prnsd-haiku/third_party/mio"'`.
 
@@ -37,8 +39,9 @@ mio has it in a release: prnsd-haiku carries it; retifsd is built with
     pkgman install haiku/build/retifs-<version>-x86_64.hpkg
 
 A system package: the app in `/boot/system/apps/retifs` (with `lib/` and `bin/`:
-prnsd, retifsd, retifs), the `retifs` command on the PATH, the jobs in
+retifsd, retifs), the `retifs` command on the PATH, the jobs in
 `data/user_launch/retifs` (at every login, and one that adds the Deskbar
-icon), and the app in the Deskbar's Applications menu.
+icon), and the app in the Deskbar's Applications menu. It requires the
+`prns` package (prnsd, Reticulum).
 
 The store is `~/config/var/retifs` (libretifs' default on Haiku).

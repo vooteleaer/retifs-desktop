@@ -66,18 +66,23 @@ pub fn reticulum() -> Value {
     })
 }
 
-/// The settings the utility offers, with their values (null: the default).
+/// The settings the utility offers: `value` what to show in the field (the
+/// file's, else the default this machine gets, so a field is never empty
+/// where there is one), `default` that default, `set` whether the file sets
+/// it, `unit` a hint for sizes. Sizes are shown with their unit (`250 GB`).
 pub fn settings() -> Value {
-    let text = std::fs::read_to_string(device::settings_file(&crate::default_store())).unwrap_or_default();
-    let list: Vec<Value> = device::SETTINGS
-        .iter()
-        .map(|(section, key, what)| {
+    let list: Vec<Value> = device::settings_view(&crate::default_store())
+        .into_iter()
+        .map(|s| {
             json!({
-                "section": section,
-                "key": key,
-                "what": what,
-                "switch": *key == "no_storage",
-                "value": device::get_setting(&text, section, key).map(|v| device::shown_value(&v)),
+                "section": s.section,
+                "key": s.key,
+                "what": s.what,
+                "switch": s.key == "no_storage",
+                "value": s.value,
+                "default": s.default,
+                "set": s.set,
+                "unit": s.unit,
             })
         })
         .collect();
@@ -85,19 +90,17 @@ pub fn settings() -> Value {
 }
 
 /// Saves settings: a JSON object `{"section.key": "typed value" | null}`;
-/// only those that changed are written. The daemon is restarted by the caller.
+/// only those that changed are written, and one typed as its default (as the
+/// field was filled) stays the default. Sizes are taken with units (`250 GB`)
+/// and written as retifsd reads them (`250G`). The daemon is restarted by the
+/// caller.
 pub fn save_settings(values: &str) -> Result<(), String> {
     let v: Value = serde_json::from_str(values).map_err(|e| e.to_string())?;
-    let path = device::settings_file(&crate::default_store());
-    let mut text = std::fs::read_to_string(&path).unwrap_or_default();
-    for (section, key, _) in device::SETTINGS {
-        let Some(typed) = v.get(format!("{section}.{key}")) else { continue };
-        let now = typed.as_str().map(str::trim).filter(|t| !t.is_empty()).map(device::toml_value);
-        if device::get_setting(&text, section, key) != now {
-            text = device::set_setting(&text, section, key, now.as_deref());
-        }
-    }
-    std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))
+    let typed: Vec<(&str, &str, String)> = device::SETTINGS
+        .iter()
+        .filter_map(|&(section, key, _)| v.get(format!("{section}.{key}")).map(|t| (section, key, t.as_str().unwrap_or("").to_string())))
+        .collect();
+    device::save_typed(&crate::default_store(), &typed)
 }
 
 /// What a tray icon shows: `health` ("good", "partly", "down") and the

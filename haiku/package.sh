@@ -1,23 +1,24 @@
 #!/bin/sh
 # Makes the retifs package for Haiku (an hpkg) from the app folder
-# build.sh made: the app with its library and the programs it manages, the
-# retifs command on the PATH, retifs and Reticulum as launch_daemon jobs at
-# login, and an entry in the Deskbar's Applications menu.
+# build.sh made: the app with its library, retifsd and the retifs command
+# (on the PATH), retifsd as a launch_daemon job at login, and an entry in
+# the Deskbar's Applications menu. Reticulum is the Prns package's (prnsd
+# with its own app and Deskbar icon), which this one requires.
 #
 #     haiku/build.sh && haiku/package.sh
 #     pkgman install haiku/build/retifs-<version>-x86_64.hpkg
 #
 # A system package: the launch jobs name the programs at their place under
-# /boot/system. On Haiku, with prnsd built in prnsd-haiku and retifsd in retifs.
+# /boot/system. On Haiku, with retifsd built in retifs.
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/.." && pwd)
 APP=$HERE/build/retifs
 STAGE=$HERE/build/package
-VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' "$ROOT/Cargo.toml" | head -1)-2
+VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' "$ROOT/Cargo.toml" | head -1)-3
 ARCH=x86_64
 
-for f in retifs lib/libretifs_desktop.so bin/prnsd bin/retifsd bin/retifs; do
+for f in retifs lib/libretifs_desktop.so bin/retifsd bin/retifs; do
 	[ -f "$APP/$f" ] || { echo "missing $APP/$f: build it first" >&2; exit 1; }
 done
 
@@ -25,13 +26,15 @@ rm -rf "${STAGE:?}"
 mkdir -p "$STAGE/apps" "$STAGE/bin" "$STAGE/data/user_launch" \
 	"$STAGE/data/deskbar/menu/Applications"
 cp -a "$APP" "$STAGE/apps/retifs"
+# A prnsd from an older build folder: Prns's package has it now.
+rm -f "$STAGE/apps/retifs/bin/prnsd"
 ln -s ../apps/retifs/bin/retifs "$STAGE/bin/retifs"
 ln -s ../../../../apps/retifs/retifs "$STAGE/data/deskbar/menu/Applications/retifs"
 
 # The jobs, with the package's paths (launch/retifs is the template).
 {
-	echo "# retifs (package): Reticulum (the bundled prnsd) and the retifs daemon,"
-	echo "# started for every user at login."
+	echo "# retifs (package): the retifs daemon, started for every user at login"
+	echo "# after Reticulum (the Prns package's prnsd)."
 	sed 's|APP|/boot/system/apps/retifs|g' "$HERE/launch/retifs" | grep -v '^#'
 } > "$STAGE/data/user_launch/retifs"
 cat >> "$STAGE/data/user_launch/retifs" <<'EOF'
@@ -51,9 +54,9 @@ description		"retifs keeps records and libraries instead of files, synced betwee
 devices and others' over Reticulum, encrypted end to end. A working prototype: \
 the formats still change, keep no data in it you can't lose.
 
-Includes the retifs daemon and command, the status and settings utility with \
-its Deskbar icon, and prnsd (Prns, MIT or Apache-2.0) for Reticulum. They \
-start at login as launch_daemon jobs; the store is ~/config/var/retifs."
+Includes the retifs daemon and command, and the status and settings utility \
+with its Deskbar icon. retifs starts at login as a launch_daemon job, on the \
+Reticulum of the Prns package (prnsd); the store is ~/config/var/retifs."
 packager		"retifs <https://github.com/vooteleaer/retifs>"
 vendor			"retifs"
 licenses {
@@ -69,6 +72,7 @@ provides {
 }
 requires {
 	haiku
+	prns
 	lib:libgcc_s
 	lib:libstdc++
 }

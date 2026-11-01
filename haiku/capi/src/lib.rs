@@ -26,7 +26,7 @@ unsafe fn arg(s: *const c_char) -> String {
     if s.is_null() { String::new() } else { unsafe { CStr::from_ptr(s) }.to_string_lossy().into_owned() }
 }
 
-/// Where the app is installed (its folder, with `bin/prnsd`), for when the
+/// Where the app is installed (its folder, with `bin/retifsd`), for when the
 /// program running isn't the app: the Deskbar replicant. Call it first.
 ///
 /// # Safety
