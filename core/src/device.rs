@@ -226,15 +226,89 @@ pub fn service(unit: &str, action: &str) -> Result<(), String> {
 }
 
 /// A launch_daemon job's state: "active" while it runs, "inactive" when it
-/// is known but not running, None when there's no such job.
+/// is known but not running. A job the launch_daemon doesn't know yet (a
+/// package's jobs are read at login, so not until the next one after
+/// installing) is its program, run by the utility itself.
 #[cfg(target_os = "haiku")]
 pub fn service_state(job: &str) -> Option<String> {
     let o = Command::new("launch_roster").args(["info", job]).output().ok()?;
-    if !o.status.success() {
-        return None;
+    let running = if o.status.success() { job_running(&String::from_utf8_lossy(&o.stdout)) } else { !haiku_teams(job).is_empty() };
+    Some(if running { "active" } else { "inactive" }.to_string())
+}
+
+/// A job's program in the install folder, and its arguments.
+#[cfg(target_os = "haiku")]
+fn job_program(job: &str) -> Option<(&'static str, &'static [&'static str])> {
+    match job {
+        "x-vnd.retifs-daemon" => Some(("retifsd", &[])),
+        "x-vnd.retifs-prnsd" => Some(("prnsd", &["run"])),
+        _ => None,
     }
-    let info = String::from_utf8_lossy(&o.stdout);
-    Some(if job_running(&info) { "active" } else { "inactive" }.to_string())
+}
+
+/// The teams running a job's program from the install folder.
+#[cfg(target_os = "haiku")]
+fn haiku_teams(job: &str) -> Vec<String> {
+    let Some((prog, _)) = job_program(job) else { return Vec::new() };
+    let path = install_dir().join("bin").join(prog);
+    let path = path.to_string_lossy();
+    let Ok(o) = Command::new("ps").output() else { return Vec::new() };
+    teams_running(&String::from_utf8_lossy(&o.stdout), &path)
+}
+
+/// Team IDs of `ps` lines running `path` (Haiku's `ps`: the command line,
+/// then team ID, threads, group and user; the ID is the fourth field from
+/// the end).
+pub fn teams_running(ps: &str, path: &str) -> Vec<String> {
+    ps.lines()
+        .filter(|l| l.split_whitespace().next() == Some(path))
+        .filter_map(|l| {
+            let f: Vec<&str> = l.split_whitespace().collect();
+            f.len().checked_sub(4).map(|i| f[i].to_string())
+        })
+        .collect()
+}
+
+/// Runs a job's program itself (the launch_daemon doesn't know the job yet),
+/// its output in `~/config/var/log/retifs/<program>.log`.
+#[cfg(target_os = "haiku")]
+fn run_program(job: &str, action: &str) -> Result<(), String> {
+    let (prog, args) = job_program(job).ok_or_else(|| format!("no job {job}"))?;
+    if action == "stop" || action == "restart" {
+        for team in haiku_teams(job) {
+            let _ = Command::new("kill").arg(&team).output();
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+    if action == "start" || action == "restart" {
+        if !haiku_teams(job).is_empty() {
+            return Ok(());
+        }
+        if prog == "prnsd" && shared_instance_up() {
+            return Err("another Reticulum runs on this machine already".into());
+        }
+        // Reticulum first, as the job requires it.
+        if prog == "retifsd" && !shared_instance_up() && install_dir().join("bin/prnsd").is_file() {
+            run_program(BUNDLED, "start")?;
+            for _ in 0..30 {
+                if shared_instance_up() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+        }
+        let logs = PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join("config/var/log/retifs");
+        std::fs::create_dir_all(&logs).map_err(|e| e.to_string())?;
+        let log = std::fs::OpenOptions::new().create(true).append(true).open(logs.join(format!("{prog}.log"))).map_err(|e| e.to_string())?;
+        Command::new(install_dir().join("bin").join(prog))
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .stdout(log.try_clone().map_err(|e| e.to_string())?)
+            .stderr(log)
+            .spawn()
+            .map_err(|e| format!("{prog}: {e}"))?;
+    }
+    Ok(())
 }
 
 /// Whether `launch_roster info` says the job runs (`running = bool(true)`).
@@ -245,9 +319,14 @@ pub fn job_running(info: &str) -> bool {
     })
 }
 
-/// `start`, `stop` or `restart` a launch_daemon job.
+/// `start`, `stop` or `restart` a launch_daemon job, or, while the
+/// launch_daemon doesn't know it yet, its program.
 #[cfg(target_os = "haiku")]
 pub fn service(job: &str, action: &str) -> Result<(), String> {
+    let known = Command::new("launch_roster").args(["info", job]).output().is_ok_and(|o| o.status.success());
+    if !known {
+        return run_program(job, action);
+    }
     let o = Command::new("launch_roster").args([action, job]).output().map_err(|e| e.to_string())?;
     if o.status.success() { Ok(()) } else { Err(first_line(&o.stderr, "launch_roster failed")) }
 }
@@ -522,6 +601,18 @@ mod tests {
             Configured { name: "RTR-3".into(), kind: "TCPClientInterface".into(), enabled: true },
             Configured { name: "Hopspot USB".into(), kind: "PrnsUsbAuto".into(), enabled: false },
         ]);
+    }
+
+    #[test]
+    fn haiku_ps_teams() {
+        let ps = "Team                                                  Id #Threads  Gid  Uid \n\
+                  kernel_team                                            1       51    0    0 \n\
+                  /boot/system/apps/retifs/bin/prnsd run                76       23    0    0 \n\
+                  /boot/system/apps/retifs/bin/retifsd                 105       17    0    0 \n\
+                  /boot/system/apps/retifs/bin/retifsd.old             107       17    0    0 \n";
+        assert_eq!(teams_running(ps, "/boot/system/apps/retifs/bin/retifsd"), ["105"]);
+        assert_eq!(teams_running(ps, "/boot/system/apps/retifs/bin/prnsd"), ["76"]);
+        assert!(teams_running(ps, "/boot/home/retifsd").is_empty());
     }
 
     #[test]
