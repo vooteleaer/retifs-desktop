@@ -533,6 +533,10 @@ private:
 			BString s;
 			s << l.GetString("name", "?") << "  —  " << l.GetString("about", "")
 				<< "  (" << (int32)l.GetDouble("hops", 0) << " hop(s) away)";
+			// Joined already (or our own): under which name.
+			const char* here = l.GetString("here", NULL);
+			if (here != NULL)
+				s << "  · here as " << here;
 			return s;
 		});
 

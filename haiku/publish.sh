@@ -1,32 +1,42 @@
 #!/bin/sh
-# Publishes Haiku packages in a retifs library that is a pkgman repository:
-# the packages in packages/, the repository file (repo) and its checksum
-# (repo.sha256) next to them. Every device that has the library mounted (in
-# ~/retifs, as the retifs package does at login) adds it once with
+# Publishes Haiku packages in a retifs library as a pkgman repository (in
+# the library, or a folder of it): the packages in packages/, the
+# repository file (repo) and its checksum (repo.sha256) next to them. Every
+# Haiku device has its libraries mounted in ~/retifs (retifsd mounts them);
+# one adds the repository once with
 #
-#     pkgman add-repo file:///boot/home/retifs/<library>
+#     pkgman add-repo file:///boot/home/retifs/<library>[/<folder>]
 #
 # and from then on gets new versions with pkgman update (or HaikuDepot),
-# fetched over Reticulum like any file in the library.
+# fetched over Reticulum like any file in the library. A package can also
+# be installed by opening it in Tracker.
 #
-#     haiku/publish.sh LIBRARY PACKAGE.hpkg...
+#     haiku/publish.sh LIBRARY[/FOLDER] PACKAGE.hpkg...
 #
-# A package replaces the older versions of itself in the library.
+# A package replaces the older versions of itself there.
 set -e
-LIB=$1
+WHERE=$1
 shift || true
-[ -n "$LIB" ] && [ $# -gt 0 ] || { echo "usage: $0 LIBRARY PACKAGE.hpkg..." >&2; exit 2; }
-DIR=$HOME/retifs/$LIB
+[ -n "$WHERE" ] && [ $# -gt 0 ] || { echo "usage: $0 LIBRARY[/FOLDER] PACKAGE.hpkg..." >&2; exit 2; }
+LIB=${WHERE%%/*}
+TOP=$HOME/retifs/$LIB
+DIR=$HOME/retifs/$WHERE
 # A volume of its own, not a folder on this disk: mounted, or made (a new
 # library begins with its first record) and mounted.
 mounted() {
-	[ -d "$DIR" ] && [ "$(stat -c %d "$DIR")" != "$(stat -c %d "$(dirname "$DIR")")" ]
+	[ -d "$TOP" ] && [ "$(stat -c %d "$TOP")" != "$(stat -c %d "$(dirname "$TOP")")" ]
 }
 if ! mounted; then
-	retifs query "$LIB" > /dev/null 2>&1 \
-		|| retifs rec add "$LIB" type=inode/directory path=/packages > /dev/null
+	if ! retifs query "$LIB" > /dev/null 2>&1; then
+		R=$(mktemp)
+		printf '%s\n' "retifs installers: Haiku packages (a pkgman repository) and" \
+			"other systems' installers. On Haiku:" \
+			"    pkgman add-repo file://$TOP/haiku" > "$R"
+		retifs rec add "$LIB" path=/README.txt type=text/plain --file "$R" > /dev/null
+		rm -f "$R"
+	fi
 	retifs mount "$LIB" > /dev/null
-	mounted || { echo "$LIB isn't mounted at $DIR" >&2; exit 1; }
+	mounted || { echo "$LIB isn't mounted at $TOP" >&2; exit 1; }
 fi
 mkdir -p "$DIR/packages"
 
@@ -46,12 +56,12 @@ done
 # and copied in: one new version of each file in the library.
 T=$(mktemp -d)
 cat > "$T/repo.info" <<EOF
-name $LIB
+name $(echo "$WHERE" | tr '/' '-')
 vendor "retifs"
-summary "Haiku packages in the retifs library $LIB"
+summary "Haiku packages in the retifs library $WHERE"
 priority 2
 baseurl file://$DIR
-identifier "tag:retifs,2026:repositories/$LIB/x86_64"
+identifier "tag:retifs,2026:repositories/$WHERE/x86_64"
 architecture x86_64
 EOF
 package_repo create -q "$T/repo.info" "$DIR"/packages/*.hpkg
@@ -60,5 +70,5 @@ for f in repo.info repo repo.sha256; do
 	cp "$T/$f" "$DIR/$f"
 done
 rm -rf "$T"
-echo "== $LIB: $(ls "$DIR/packages" | wc -l) package(s); on another device:"
+echo "== $WHERE: $(ls "$DIR/packages" | wc -l) package(s); on another device:"
 echo "   pkgman add-repo file://$DIR"

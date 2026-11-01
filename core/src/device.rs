@@ -672,7 +672,10 @@ fn hostname() -> String {
         .ok()
         .or_else(|| std::fs::read_to_string("/etc/hostname").ok())
         // Haiku has neither: its `hostname` says.
-        .or_else(|| Command::new("hostname").output().ok().map(|o| String::from_utf8_lossy(&o.stdout).into_owned()))
+        .or_else(|| {
+            let cmd = ["/boot/system/bin/hostname", "hostname"].into_iter().find(|c| !c.starts_with('/') || Path::new(c).exists())?;
+            Command::new(cmd).output().ok().map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        })
         .map(|h| h.trim().to_lowercase())
         .filter(|h| !h.is_empty())
         .unwrap_or_else(|| "this-device".into())
