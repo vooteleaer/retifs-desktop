@@ -14,12 +14,15 @@
 #include <Application.h>
 #include <Bitmap.h>
 #include <Button.h>
+#include <Clipboard.h>
+#include <FindDirectory.h>
 #include <CheckBox.h>
 #include <Deskbar.h>
 #include <LayoutBuilder.h>
 #include <ListItem.h>
 #include <ListView.h>
 #include <MenuItem.h>
+#include <MessageFilter.h>
 #include <MessageRunner.h>
 #include <Path.h>
 #include <PopUpMenu.h>
@@ -33,6 +36,7 @@
 #include <TabView.h>
 #include <TextControl.h>
 #include <Window.h>
+#include <image.h>
 
 #include <Json.h>
 
@@ -54,7 +58,15 @@ enum {
 	kStart = 'strt',
 	kRestart = 'rstr',
 	kStop = 'stop',
-	kLeave = 'leav',
+	kLeave = 'leav',		// window: leave a library? ("ns")
+	kLeaveYes = 'lvys',		// the alert's answer
+	kKeep = 'keep',			// "ns", "all"
+	kCopyLink = 'clnk',		// "ns"
+	kLinked = 'lnkd',		// window: the link ("link")
+	kAnnounce = 'anno',		// "ns", "on"
+	kAnnounceYes = 'anys',	// the alert's answer
+	kFavorite = 'favo',		// "ns", "on"
+	kTracker = 'trkr',		// "ns": its folder in Tracker
 	kJoin = 'join',
 	kOpenLink = 'olnk',
 	kEnable = 'enab',
@@ -142,6 +154,97 @@ JsonString(const char* s)
 }
 
 
+// #pragma mark - Library box
+
+
+/*! "95,335": a count, its thousands set apart. */
+static BString
+Grouped(int64 n)
+{
+	BString digits;
+	digits << n;
+	BString out;
+	int32 length = digits.Length();
+	for (int32 i = 0; i < length; i++) {
+		if (i > 0 && (length - i) % 3 == 0)
+			out << ",";
+		out << digits.ByteAt(i);
+	}
+	return out;
+}
+
+
+/*! A library: a small box with its name and, under it, smaller, who may
+	do what with it and what's here of it. Right-click for what can be done
+	with it (the window's LibraryMenu). The same as in the apps. */
+class LibraryItem : public BView {
+public:
+	LibraryItem(const BMessage& library)
+		:
+		BView(library.GetString("name", ""), B_WILL_DRAW | B_FRAME_EVENTS),
+		fLibrary(library)
+	{
+		SetViewUIColor(B_PANEL_BACKGROUND_COLOR);
+		BString name(library.GetString("name", ""));
+		if (library.GetBool("favorite", false))
+			name.Prepend("★ ");
+		BStringView* title = new BStringView(NULL, name.String());
+		title->SetFont(be_bold_font);
+
+		BString who;
+		who << (library.GetBool("public", false) ? "public" : "private")
+			<< "  ·  " << library.GetString("access", "");
+		if (library.GetBool("own", false))
+			who << "  ·  yours";
+		BString what;
+		int64 records = (int64)library.GetDouble("records", 0);
+		int32 peers = (int32)library.GetDouble("peers", 0);
+		what << Grouped(records) << (records == 1 ? " record" : " records")
+			<< "  ·  " << peers << (peers == 1 ? " peer" : " peers") << "  ·  "
+			<< (library.GetBool("lazy", false) ? "fetched as needed"
+				: BString(library.GetString("keep", "")) == "all"
+					? "kept on this device" : "content fetched as needed");
+
+		float em = be_plain_font->Size();
+		BLayoutBuilder::Group<>(this, B_VERTICAL, 0)
+			.SetInsets(em * 0.6, em * 0.35, em * 0.6, em * 0.45)
+			.Add(title)
+			.Add(_Small(who))
+			.Add(_Small(what));
+	}
+
+	const BMessage& Library() const { return fLibrary; }
+	BString Name() const { return fLibrary.GetString("name", ""); }
+
+	void Draw(BRect)
+	{
+		SetHighColor(tint_color(ui_color(B_PANEL_BACKGROUND_COLOR),
+			B_DARKEN_2_TINT));
+		StrokeRoundRect(Bounds().InsetByCopy(0.5, 0.5), 4, 4);
+	}
+
+	void FrameResized(float, float)
+	{
+		Invalidate();
+	}
+
+private:
+	static BStringView* _Small(const BString& text)
+	{
+		BStringView* v = new BStringView(NULL, text.String());
+		BFont small(be_plain_font);
+		small.SetSize(small.Size() * 0.85);
+		v->SetFont(&small);
+		v->SetHighColor(mix_color(ui_color(B_PANEL_TEXT_COLOR),
+			ui_color(B_PANEL_BACKGROUND_COLOR), 150));
+		v->SetTruncation(B_TRUNCATE_END);
+		return v;
+	}
+
+	BMessage fLibrary;
+};
+
+
 // #pragma mark - Worker
 
 
@@ -182,6 +285,18 @@ public:
 					error = Result(rd_open_link(a.String()));
 				else if (op == "leave")
 					error = Result(rd_leave(a.String()));
+				else if (op == "keep")
+					error = Result(rd_keep(a.String(), message->GetBool("on", false)));
+				else if (op == "announce")
+					error = Result(rd_announce(a.String(), message->GetBool("on", false)));
+				else if (op == "favorite")
+					error = Result(rd_favorite(a.String(), message->GetBool("on", false)));
+				else if (op == "link") {
+					BMessage linked(kLinked);
+					linked.AddString("link", Result(rd_link(a.String())));
+					fTarget.SendMessage(&linked);
+					break;
+				}
 				else if (op == "enable" || op == "disable")
 					error = Result(rd_set_interface(a.String(), op == "enable"));
 				else if (op == "remove")
@@ -278,8 +393,78 @@ public:
 				_Act("service", "stop");
 				break;
 			case kLeave:
-				_Act("leave", _Selected(fLibraries, fLibraryNames));
+			{
+				fAsked = message->GetString("ns", "");
+				BString text;
+				text << "Leave " << fAsked << "?\n\nIts records go from this "
+					"device. Others who have it keep theirs; you can join it "
+					"again.";
+				BAlert* alert = new BAlert("Leave", text.String(), "Cancel",
+					"Leave", NULL, B_WIDTH_AS_USUAL, B_WARNING_ALERT);
+				alert->SetShortcut(0, B_ESCAPE);
+				alert->Go(new BInvoker(new BMessage(kLeaveYes), this));
 				break;
+			}
+			case kLeaveYes:
+				if (message->GetInt32("which", 0) == 1)
+					_Act("leave", fAsked);
+				break;
+			case kKeep:
+				_Act("keep", message->GetString("ns", ""),
+					message->GetBool("all", false));
+				break;
+			case kFavorite:
+				_Act("favorite", message->GetString("ns", ""),
+					message->GetBool("on", false));
+				break;
+			case kAnnounce:
+			{
+				BString ns = message->GetString("ns", "");
+				if (!message->GetBool("on", false)) {
+					_Act("announce", ns, false);
+					break;
+				}
+				fAsked = ns;
+				BString text;
+				text << "Announce " << ns << " on the network?\n\nAnyone who "
+					"hears it can then join it and read everything in it. "
+					"Only you (and those you invite) can write.";
+				BAlert* alert = new BAlert("Announce", text.String(), "Cancel",
+					"Announce", NULL, B_WIDTH_AS_USUAL, B_WARNING_ALERT);
+				alert->SetShortcut(0, B_ESCAPE);
+				alert->Go(new BInvoker(new BMessage(kAnnounceYes), this));
+				break;
+			}
+			case kAnnounceYes:
+				if (message->GetInt32("which", 0) == 1)
+					_Act("announce", fAsked, true);
+				break;
+			case kCopyLink:
+				_Act("link", message->GetString("ns", ""));
+				break;
+			case kLinked:
+			{
+				BString link = message->GetString("link", "");
+				if (link.IsEmpty() || !be_clipboard->Lock())
+					break;
+				be_clipboard->Clear();
+				be_clipboard->Data()->AddData("text/plain", B_MIME_TYPE,
+					link.String(), link.Length());
+				be_clipboard->Commit();
+				be_clipboard->Unlock();
+				break;
+			}
+			case kTracker:
+			{
+				BPath path;
+				find_directory(B_USER_DIRECTORY, &path);
+				path.Append("retifs");
+				path.Append(message->GetString("ns", ""));
+				entry_ref ref;
+				if (get_ref_for_path(path.Path(), &ref) == B_OK)
+					be_roster->Launch(&ref);
+				break;
+			}
 			case kJoin:
 			{
 				BButton* b = NULL;
@@ -335,7 +520,13 @@ private:
 		fNode = new BStringView("node", "");
 		fUsage = new BStringView("usage", "");
 		fUsage2 = new BStringView("usage2", "");
-		fLibraries = new BListView("libraries");
+		fLibraries = new BGroupView(B_VERTICAL, 4);
+		fLibraries->GroupLayout()->SetInsets(0, 0, B_USE_SMALL_SPACING, 0);
+		BView* libraryArea = new BView("library area", 0);
+		BLayoutBuilder::Group<>(libraryArea, B_VERTICAL, 0)
+			.Add(fLibraries)
+			.AddGlue();
+		AddCommonFilter(new BMessageFilter(B_MOUSE_DOWN, &_RightClick));
 
 		BView* view = new BView("This device", 0);
 		BLayoutBuilder::Group<>(view, B_VERTICAL)
@@ -351,12 +542,9 @@ private:
 				.AddGlue()
 			.End()
 			.Add(new BSeparatorView(B_HORIZONTAL))
-			.Add(new BStringView("l", "Libraries"))
-			.Add(new BScrollView("ls", fLibraries, 0, false, true))
-			.AddGroup(B_HORIZONTAL)
-				.AddGlue()
-				.Add(new BButton("Leave", new BMessage(kLeave)))
-			.End();
+			.Add(_Heading("Libraries"))
+			.Add(new BScrollView("ls", libraryArea, 0, false, true,
+				B_NO_BORDER));
 		return view;
 	}
 
@@ -629,14 +817,116 @@ private:
 		return json;
 	}
 
-	void _Act(const char* op, const BString& a)
+	void _Act(const char* op, const BString& a, bool on = false)
 	{
 		if (a.IsEmpty() && BString(op) != "save")
 			return;
 		BMessage act(kAct);
 		act.AddString("op", op);
 		act.AddString("a", a);
+		act.AddBool("on", on);
 		fWorker->PostMessage(&act);
+	}
+
+public:
+	/*! A right-click on a library: what can be done with it. */
+	bool LibraryMenu(BView* view, BPoint where)
+	{
+		LibraryItem* item = NULL;
+		for (BView* v = view; v != NULL && item == NULL; v = v->Parent())
+			item = dynamic_cast<LibraryItem*>(v);
+		if (item == NULL)
+			return false;
+		const BMessage& l = item->Library();
+		BString ns = item->Name();
+		bool me = ns == "me", own = l.GetBool("own", false);
+		bool kept = !l.GetBool("lazy", false)
+			&& BString(l.GetString("keep", "")) == "all";
+
+		BPopUpMenu* menu = new BPopUpMenu("library", false, false);
+		auto add = [&](const char* label, uint32 what, const char* key,
+				bool value, bool marked, bool enabled) {
+			BMessage* m = new BMessage(what);
+			m->AddString("ns", ns);
+			if (key != NULL)
+				m->AddBool(key, value);
+			BMenuItem* i = new BMenuItem(label, m);
+			i->SetMarked(marked);
+			i->SetEnabled(enabled);
+			menu->AddItem(i);
+		};
+		bool favorite = l.GetBool("favorite", false);
+		add("Favorite", kFavorite, "on", !favorite, favorite, !me);
+		add("Open in Tracker", kTracker, NULL, false, false, !me);
+		menu->AddSeparatorItem();
+		add("Keep on this device", kKeep, "all", !kept, kept, true);
+		add(l.GetBool("public", false) ? "Copy link"
+			: "Copy link (whoever has it can read)", kCopyLink, NULL, false,
+			false, !me);
+		if (own && !me) {
+			bool announced = l.GetBool("announced", false);
+			add(announced ? "Stop announcing" : "Announce on the network…",
+				kAnnounce, "on", !announced, false, true);
+		}
+		menu->AddSeparatorItem();
+		// One's own: made here, others may hold it only through this device.
+		add("Leave library…", kLeave, NULL, false, false, !me && !own);
+		menu->SetTargetForItems(this);
+		view->ConvertToScreen(&where);
+		menu->SetAsyncAutoDestruct(true);
+		menu->Go(where, true, false, true);
+		return true;
+	}
+
+private:
+	static filter_result _RightClick(BMessage* message, BHandler** target,
+		BMessageFilter* filter)
+	{
+		if ((message->GetInt32("buttons", 0) & B_SECONDARY_MOUSE_BUTTON) == 0)
+			return B_DISPATCH_MESSAGE;
+		BView* view = dynamic_cast<BView*>(*target);
+		RetifsWindow* window = dynamic_cast<RetifsWindow*>(filter->Looper());
+		BPoint where;
+		if (view == NULL || window == NULL
+			|| message->FindPoint("be:view_where", &where) != B_OK)
+			return B_DISPATCH_MESSAGE;
+		return window->LibraryMenu(view, where)
+			? B_SKIP_MESSAGE : B_DISPATCH_MESSAGE;
+	}
+
+	BStringView* _Heading(const char* text)
+	{
+		BStringView* v = new BStringView(NULL, text);
+		v->SetFont(be_bold_font);
+		return v;
+	}
+
+	/*! The library boxes, rebuilt only when something in them changed (the
+		window asks every few seconds; a rebuild would close a menu). */
+	void _FillLibraries(const BMessage& libraries)
+	{
+		int32 count = libraries.HasString("error") ? 0 : Count(libraries);
+		BString key;
+		for (int32 i = 0; i < count; i++) {
+			BMessage l = Item(libraries, i);
+			key << l.GetString("name", "") << "|" << l.GetDouble("records", 0)
+				<< "|" << l.GetDouble("peers", 0) << "|" << l.GetBool("lazy", false)
+				<< "|" << l.GetString("keep", "") << "|" << l.GetString("access", "")
+				<< "|" << l.GetBool("public", false) << "|" << l.GetBool("favorite", false)
+				<< "|" << l.GetBool("announced", false) << "\n";
+		}
+		if (key == fLibrariesKey)
+			return;
+		fLibrariesKey = key;
+		while (fLibraries->CountChildren() > 0) {
+			BView* v = fLibraries->ChildAt(0);
+			fLibraries->RemoveChild(v);
+			delete v;
+		}
+		for (int32 i = 0; i < count; i++)
+			fLibraries->AddChild(new LibraryItem(Item(libraries, i)));
+		if (count == 0)
+			fLibraries->AddChild(new BStringView(NULL, "No libraries here yet"));
 	}
 
 	BString _Selected(BListView* list, const BStringList& values)
@@ -684,14 +974,7 @@ private:
 
 		BMessage libraries;
 		status.FindMessage("libraries", &libraries);
-		_Fill(fLibraries, fLibraryNames, libraries, "name", [](BMessage& l) {
-			BString s;
-			s << l.GetString("name", "?") << "  —  "
-				<< (int32)l.GetDouble("records", 0) << " record(s), "
-				<< (int32)l.GetDouble("peers", 0) << " peer(s)"
-				<< (l.GetBool("lazy", false) ? ", fetched as needed" : "");
-			return s;
-		});
+		_FillLibraries(libraries);
 		_FillAnnounces(heard);
 
 		// Network.
@@ -748,8 +1031,9 @@ private:
 	BStringView* fNode;
 	BStringView* fUsage;
 	BStringView* fUsage2;
-	BListView* fLibraries;
-	BStringList fLibraryNames;
+	BGroupView* fLibraries;
+	BString fLibrariesKey;
+	BString fAsked;
 	BGroupView* fAnnounceList;
 	BString fAnnounceKey;
 	BStringView* fReticulum;
@@ -776,6 +1060,32 @@ private:
 	view lives in the Deskbar's process, so the core's blocking calls run in
 	a thread of its own, which sends the view what it found.
 */
+/*!	Keeps this image (and the core it links) loaded in the Deskbar's process
+	for good: unloaded when the replicant goes (a new version replacing it),
+	it left behind something a later fork() in the Deskbar jumped into, and
+	the Deskbar crashed (in the prns tray's popen). A second reference, never
+	dropped, keeps it mapped.
+*/
+static void
+PinImage()
+{
+	static bool pinned = false;
+	if (pinned)
+		return;
+	pinned = true;
+	addr_t self = (addr_t)&PinImage;
+	image_info info;
+	int32 cookie = 0;
+	while (get_next_image_info(B_CURRENT_TEAM, &cookie, &info) == B_OK) {
+		addr_t start = (addr_t)info.text;
+		if (self >= start && self < start + info.text_size) {
+			load_add_on(info.name);
+			return;
+		}
+	}
+}
+
+
 class _EXPORT DeskbarView : public BView {
 public:
 	DeskbarView(BRect frame)
@@ -813,6 +1123,7 @@ public:
 	void AttachedToWindow()
 	{
 		BView::AttachedToWindow();
+		PinImage();
 		AdoptParentColors();
 		// In the Deskbar's process the core can't tell the app's folder (and
 		// retifsd in it) from the program running: say it.

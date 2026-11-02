@@ -88,6 +88,35 @@ pub unsafe extern "C" fn rd_leave(ns: *const c_char) -> *mut c_char {
 }
 
 /// # Safety
+/// `ns` is a NUL-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rd_keep(ns: *const c_char, all: c_int) -> *mut c_char {
+    result(api::keep(&unsafe { arg(ns) }, all != 0))
+}
+
+/// A library's link; empty if there's none to give.
+/// # Safety
+/// `ns` is a NUL-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rd_link(ns: *const c_char) -> *mut c_char {
+    out(api::link(&unsafe { arg(ns) }).unwrap_or_default())
+}
+
+/// # Safety
+/// `ns` is a NUL-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rd_announce(ns: *const c_char, on: c_int) -> *mut c_char {
+    result(api::announce(&unsafe { arg(ns) }, on != 0))
+}
+
+/// # Safety
+/// `ns` is a NUL-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rd_favorite(ns: *const c_char, on: c_int) -> *mut c_char {
+    result(api::favorite(&unsafe { arg(ns) }, on != 0))
+}
+
+/// # Safety
 /// `name` and `host` are NUL-terminated strings.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rd_add_tcp(name: *const c_char, host: *const c_char, port: c_int) -> *mut c_char {

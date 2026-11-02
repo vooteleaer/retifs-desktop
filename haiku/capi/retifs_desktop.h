@@ -13,7 +13,9 @@ extern "C" {
 /* Where the app is (its folder): for the Deskbar replicant, which runs in Deskbar. */
 void rd_set_app_dir(const char* dir);
 
-char* rd_status(void);      /* {"up", "store", "node", "chunks", "usage", "error", "libraries"} */
+char* rd_status(void);      /* {"up", "store", "node", "chunks", "usage", "error", "libraries"}
+                               libraries: NsInfo views, favorites first, with "access",
+                               "own", "public", "favorite" */
 char* rd_heard(void);       /* [{"name", "about", "address", "node", "hops", ...}] or {"error"} */
 char* rd_reticulum(void);   /* {"running", "transport", "uptime", "error", "connections"} */
 char* rd_settings(void);    /* [{"section", "key", "what", "switch", "value"}] */
@@ -24,6 +26,10 @@ char* rd_join(const char* address);
 /* Joins the library a retifs: link or invitation names: "" or the error. */
 char* rd_open_link(const char* link);
 char* rd_leave(const char* ns);
+char* rd_keep(const char* ns, int all);       /* all: records and content kept here */
+char* rd_link(const char* ns);                /* the library's link, or "" */
+char* rd_announce(const char* ns, int on);
+char* rd_favorite(const char* ns, int on);
 char* rd_add_tcp(const char* name, const char* host, int port);
 char* rd_set_interface(const char* name, int enabled);
 char* rd_remove_interface(const char* name);

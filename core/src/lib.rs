@@ -259,6 +259,68 @@ impl Daemon {
             .collect())
     }
 
+    /// The libraries for a list of them, each its view (`NsInfo`) and what a
+    /// person wants to know at a glance: `access` ("read only", "read and
+    /// write", "read, write and invite"), `own` (made by this user), `public`
+    /// (announced, here or by whoever made it), `favorite`. Favorites first,
+    /// then by name; `me` (this user's own) last.
+    pub fn libraries(&self) -> Result<serde_json::Value, String> {
+        let views = self.namespaces()?;
+        let mut c = self.client()?;
+        let favorites: Vec<String> = self.rt.block_on(saved::favorites(&mut c)).into_iter().map(|(w, _)| w).collect();
+        let heard_here: Vec<String> = self.heard().unwrap_or_default().into_iter().filter_map(|l| l.here).collect();
+        let mut out: Vec<(bool, bool, String, serde_json::Value)> = views
+            .into_iter()
+            .map(|v| {
+                let creator = v.address.split(':').nth(2).unwrap_or("").to_string();
+                let rights = v.writers.iter().find(|(w, _)| *w == v.own_writer).map(|(_, r)| r.clone());
+                let access = match &rights {
+                    Some(r) if r.iter().any(|x| x == "grant") => "read, write and invite",
+                    Some(_) => "read and write",
+                    None => "read only",
+                };
+                let favorite = favorites.contains(&creator);
+                let public = v.announced || heard_here.contains(&v.name);
+                let mut j = serde_json::to_value(&v).unwrap_or_default();
+                j["access"] = access.into();
+                j["own"] = (creator == v.own_writer).into();
+                j["public"] = public.into();
+                j["favorite"] = favorite.into();
+                (v.name == saved::ME, !favorite, v.name.to_lowercase(), j)
+            })
+            .collect();
+        out.sort_by(|a, b| (a.0, a.1, &a.2).cmp(&(b.0, b.1, &b.2)));
+        Ok(serde_json::Value::Array(out.into_iter().map(|(_, _, _, j)| j).collect()))
+    }
+
+    pub fn keep(&self, ns: &str, all: bool) -> Result<(), String> {
+        let mut c = self.client()?;
+        let mode = if all { "all" } else { "rules" };
+        self.request(&mut c, Request::NsKeep { ns: ns.into(), mode: mode.into() }).map(|_| ())
+    }
+
+    /// A read link to a library, naming this node to fetch from.
+    pub fn link(&self, ns: &str) -> Result<String, String> {
+        let mut c = self.client()?;
+        let address = match self.request(&mut c, Request::NsInfo { ns: ns.into() })? {
+            Response::Namespace(v) => v.address,
+            _ => return Err("unexpected answer".into()),
+        };
+        let node = self.status().node.unwrap_or_default();
+        let from: Vec<String> = if node.is_empty() { Vec::new() } else { vec![node] };
+        Ok(libretifs::link::Link::namespace(&address, &from, Some(ns)).to_string())
+    }
+
+    pub fn announce(&self, ns: &str, on: bool) -> Result<(), String> {
+        let mut c = self.client()?;
+        self.request(&mut c, Request::NsAnnounce { ns: ns.into(), on, name: None, about: None }).map(|_| ())
+    }
+
+    pub fn favorite(&self, ns: &str, on: bool) -> Result<(), String> {
+        let mut c = self.client()?;
+        self.rt.block_on(saved::set_favorite(&mut c, ns, on))
+    }
+
     /// A new namespace of this user's, `name` (its keys are made here).
     pub fn create_namespace(&self, name: &str) -> Result<(), String> {
         let mut c = self.client()?;

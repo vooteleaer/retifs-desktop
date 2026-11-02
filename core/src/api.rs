@@ -10,7 +10,7 @@ use crate::{Daemon, device};
 pub fn status() -> Value {
     let d = Daemon::new();
     let s = d.status();
-    let libraries = if s.up { d.namespaces().map(|l| json!(l)).unwrap_or(json!([])) } else { json!([]) };
+    let libraries = if s.up { d.libraries().unwrap_or(json!([])) } else { json!([]) };
     json!({
         "up": s.up,
         "store": s.store,
@@ -46,6 +46,27 @@ pub fn open_link(link: &str) -> Result<String, String> {
 
 pub fn leave(ns: &str) -> Result<(), String> {
     Daemon::new().leave(ns)
+}
+
+/// Keeps all of a library here (records and content, readable offline), or
+/// only what's used.
+pub fn keep(ns: &str, all: bool) -> Result<(), String> {
+    Daemon::new().keep(ns, all)
+}
+
+/// A library's link (`retifs:ns/…`): whoever has it can read the library.
+pub fn link(ns: &str) -> Result<String, String> {
+    Daemon::new().link(ns)
+}
+
+/// Announces a library on the network as public, or stops.
+pub fn announce(ns: &str, on: bool) -> Result<(), String> {
+    Daemon::new().announce(ns, on)
+}
+
+/// Makes a library a favorite (on every device of the user's), or not.
+pub fn favorite(ns: &str, on: bool) -> Result<(), String> {
+    Daemon::new().favorite(ns, on)
 }
 
 /// Reticulum and its connections (configured, and as they are now).
