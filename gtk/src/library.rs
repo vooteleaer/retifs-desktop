@@ -232,13 +232,14 @@ pub fn page(me: &Rc<App>, ns: &NsView) -> adw::PreferencesPage {
         });
     }
     device.add(&keep);
-    if ns.syncing || ns.kept_here < ns.kept {
+    if ns.coming() {
+        let here = ns.kept_here.unwrap_or(0);
         let row = adw::ActionRow::builder()
-            .title(if ns.syncing && ns.kept == 0 { "Fetching its records…".to_string() } else { format!("Fetching {} of {} files…", ns.kept_here, ns.kept) })
+            .title(if ns.syncing && ns.kept == 0 { "Fetching its records…".to_string() } else { format!("Fetching {} of {} files…", here, ns.kept) })
             .build();
         let bar = gtk::ProgressBar::builder().valign(gtk::Align::Center).width_request(200).build();
         if ns.kept > 0 {
-            bar.set_fraction(ns.kept_here as f64 / ns.kept as f64);
+            bar.set_fraction(here as f64 / ns.kept as f64);
         } else {
             bar.pulse();
         }

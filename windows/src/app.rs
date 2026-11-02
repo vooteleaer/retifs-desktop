@@ -52,19 +52,24 @@ struct Snapshot {
     reticulum: Reticulum,
     configured: Vec<Configured>,
     services: Vec<Option<String>>,
+    /// Daemon::libraries, and the libraries heard (the Libraries and Announces pages).
+    libs: Vec<serde_json::Value>,
+    heard: Vec<retifs_desktop_core::HeardLibrary>,
 }
 
 static SNAPSHOT: Mutex<Option<Snapshot>> = Mutex::new(None);
 static NOTE: Mutex<String> = Mutex::new(String::new());
 /// The main window, for the worker threads to post to.
-static MAIN: AtomicIsize = AtomicIsize::new(0);
+pub(crate) static MAIN: AtomicIsize = AtomicIsize::new(0);
 /// Wakes the worker before its next round (after a change).
 static POKE: (Mutex<bool>, Condvar) = (Mutex::new(false), Condvar::new());
 
 struct Ui {
     hwnd: HWND,
     tabs: HWND,
-    pages: [Vec<HWND>; 3],
+    /// Overview, Libraries, Announces, Network, Settings.
+    pages: [Vec<HWND>; 5],
+    lib_pages: crate::libraries::Pages,
     overview: HWND,
     net: HWND,
     list: HWND,
@@ -118,7 +123,7 @@ unsafe fn snapshot(hwnd: HWND, path: &str) {
     let _ = std::fs::write(path, file);
 }
 
-fn wide(s: &str) -> HSTRING {
+pub(crate) fn wide(s: &str) -> HSTRING {
     HSTRING::from(s)
 }
 
@@ -132,12 +137,12 @@ fn post(msg: u32) {
 }
 
 /// Says something at the bottom of the window (from any thread).
-fn note(text: impl Into<String>) {
+pub(crate) fn note(text: impl Into<String>) {
     *NOTE.lock().unwrap() = text.into();
     post(WM_NOTE);
 }
 
-fn poke() {
+pub(crate) fn poke() {
     let (m, c) = &POKE;
     *m.lock().unwrap() = true;
     c.notify_all();
@@ -145,7 +150,7 @@ fn poke() {
 
 /// Runs `work` on a thread; its error (if any) goes to the note line, and
 /// the worker looks again.
-fn spawn(what: &'static str, work: impl FnOnce() -> Result<(), String> + Send + 'static) {
+pub(crate) fn spawn(what: &'static str, work: impl FnOnce() -> Result<(), String> + Send + 'static) {
     note(format!("{what}…"));
     std::thread::spawn(move || {
         match work() {
@@ -173,8 +178,10 @@ pub fn run() {
     let show = std::env::args().any(|a| a == "--show");
     unsafe {
         // One instance: started again, the running one shows its window.
+        // (Not for snapshots: a test copy mustn't bring the user's to the front.)
+        let snapshotting = std::env::var_os("RETIFS_DESKTOP_SNAPSHOT").is_some();
         let _single = CreateMutexW(None, true, w!("Local\\retifs-desktop"));
-        if GetLastError() == ERROR_ALREADY_EXISTS {
+        if GetLastError() == ERROR_ALREADY_EXISTS && !snapshotting {
             if let Ok(h) = FindWindowW(CLASS, None) {
                 let _ = ShowWindow(h, SW_SHOWNORMAL);
                 let _ = SetForegroundWindow(h);
@@ -196,6 +203,7 @@ pub fn run() {
         RegisterClassW(&class);
         let add_class = WNDCLASSW { lpfnWndProc: Some(addproc), lpszClassName: ADD_CLASS, ..class };
         RegisterClassW(&add_class);
+        crate::libraries::register(&class);
         let Ok(hwnd) = CreateWindowExW(
             WINDOW_EX_STYLE(0),
             CLASS,
@@ -261,12 +269,15 @@ fn worker() {
     loop {
         let status = daemon.status();
         let libraries = if status.up { daemon.namespace_names().map(|n| n.len()).unwrap_or(0) } else { 0 };
+        let (libs, heard) = if status.up { crate::libraries::fetch(&daemon) } else { Default::default() };
         let snapshot = Snapshot {
             status,
             libraries,
             reticulum: device::reticulum(),
             configured: device::configured().unwrap_or_default(),
             services: device::SERVICES.iter().map(|(s, _)| device::service_state(s)).collect(),
+            libs,
+            heard,
         };
         *SNAPSHOT.lock().unwrap() = Some(snapshot);
         post(WM_REFRESHED);
@@ -312,7 +323,7 @@ unsafe fn icon(health: Health) -> HICON {
     icon
 }
 
-unsafe fn child(parent: HWND, class: PCWSTR, text: &str, style: WINDOW_STYLE, id: i32, font: HFONT) -> HWND {
+pub(crate) unsafe fn child(parent: HWND, class: PCWSTR, text: &str, style: WINDOW_STYLE, id: i32, font: HFONT) -> HWND {
     let h = CreateWindowExW(
         WINDOW_EX_STYLE(0),
         class,
@@ -341,7 +352,7 @@ unsafe fn message_font() -> HFONT {
 unsafe fn build(hwnd: HWND, icons: [HICON; 3]) {
     let font = message_font();
     let tabs = child(hwnd, WC_TABCONTROLW, "", WS_VISIBLE | WS_CLIPSIBLINGS | WS_TABSTOP, ID_TABS, font);
-    for (i, t) in ["Overview", "Network", "Settings"].iter().enumerate() {
+    for (i, t) in ["Overview", "Libraries", "Announces", "Network", "Settings"].iter().enumerate() {
         let text = wide(t);
         let item = TCITEMW { mask: TCIF_TEXT, pszText: PWSTR(text.as_ptr() as *mut u16), ..Default::default() };
         SendMessageW(tabs, TCM_INSERTITEMW, WPARAM(i), LPARAM(&item as *const _ as isize));
@@ -383,6 +394,7 @@ unsafe fn build(hwnd: HWND, icons: [HICON; 3]) {
         settings_page.push(e);
         edits.push((section, key, l, e));
     }
+    let lib_pages = crate::libraries::build(hwnd, font);
     let save = button("Save and restart retifs", ID_SAVE);
     settings_page.push(save);
     let note = label("");
@@ -392,7 +404,14 @@ unsafe fn build(hwnd: HWND, icons: [HICON; 3]) {
         *u.borrow_mut() = Some(Ui {
             hwnd,
             tabs,
-            pages: [vec![overview, start, stop, restart], vec![net, list, add, toggle, remove], settings_page],
+            pages: [
+                vec![overview, start, stop, restart],
+                [vec![lib_pages.libs], lib_pages.libs_buttons.clone()].concat(),
+                vec![lib_pages.heard_note, lib_pages.heard, lib_pages.join],
+                vec![net, list, add, toggle, remove],
+                settings_page,
+            ],
+            lib_pages,
             overview,
             net,
             list,
@@ -411,7 +430,7 @@ unsafe fn build(hwnd: HWND, icons: [HICON; 3]) {
     layout(hwnd);
 }
 
-unsafe fn scale(hwnd: HWND, v: i32) -> i32 {
+pub(crate) unsafe fn scale(hwnd: HWND, v: i32) -> i32 {
     v * GetDpiForWindow(hwnd).max(96) as i32 / 96
 }
 
@@ -437,10 +456,11 @@ unsafe fn layout(hwnd: HWND) {
         for (i, b) in u.pages[0][1..].iter().enumerate() {
             place(*b, x + i as i32 * (bw + s(8)), y + ph - bh, bw, bh);
         }
+        crate::libraries::layout(&u.lib_pages, hwnd, x, y, pw, ph);
         // Network: a line, the list, the buttons.
         place(u.net, x, y, pw, s(40));
         place(u.list, x, y + s(46), pw, ph - s(46) - bh - s(10));
-        for (i, b) in u.pages[1][2..].iter().enumerate() {
+        for (i, b) in u.pages[3][2..].iter().enumerate() {
             place(*b, x + i as i32 * (bw + s(8)), y + ph - bh, bw, bh);
         }
         // Settings: a label and a field a row.
@@ -450,7 +470,7 @@ unsafe fn layout(hwnd: HWND) {
             place(*l, x, ry + s(4), lw - s(8), s(24));
             place(*e, x + lw, ry, pw - lw, s(26));
         }
-        if let Some(save) = u.pages[2].last() {
+        if let Some(save) = u.pages[4].last() {
             place(*save, x + pw - s(200), y + ph - bh, s(200), bh);
         }
         place(u.note, m, h - m - s(20), w - 2 * m, s(20));
@@ -469,11 +489,11 @@ unsafe fn show_page(n: usize) {
     });
 }
 
-unsafe fn set_text(h: HWND, text: &str) {
+pub(crate) unsafe fn set_text(h: HWND, text: &str) {
     let _ = SetWindowTextW(h, &wide(text));
 }
 
-unsafe fn text_of(h: HWND) -> String {
+pub(crate) unsafe fn text_of(h: HWND) -> String {
     let len = GetWindowTextLengthW(h);
     let mut buf = vec![0u16; len as usize + 1];
     let n = GetWindowTextW(h, &mut buf);
@@ -575,6 +595,8 @@ unsafe fn refreshed() {
             let item = LVITEMW { stateMask: LVIS_SELECTED, state: LVIS_SELECTED, ..Default::default() };
             SendMessageW(u.list, LVM_SETITEMSTATE, WPARAM(selected as usize), LPARAM(&item as *const _ as isize));
         }
+
+        crate::libraries::show(&u.lib_pages, &s.libs, &s.heard);
 
         let t = tray_state(&s);
         let icon = u.icons[match t.health() {
@@ -705,6 +727,13 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 let tabs = UI.with(|u| u.borrow().as_ref().map(|u| u.tabs)).unwrap_or_default();
                 show_page(SendMessageW(tabs, TCM_GETCURSEL, WPARAM(0), LPARAM(0)).0 as usize);
             }
+            // A library right-clicked: its menu (no borrow held: the menu's
+            // own loop dispatches messages here).
+            if hdr.idFrom == crate::libraries::ID_LIBS as usize && hdr.code == NM_RCLICK {
+                if let Some(p) = UI.with(|u| u.borrow().as_ref().map(|u| u.lib_pages.clone())) {
+                    crate::libraries::context(&p, hwnd);
+                }
+            }
             LRESULT(0)
         }
         WM_COMMAND => {
@@ -727,8 +756,17 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     None => note("Pick a connection first"),
                 },
                 ID_SAVE => save_settings(),
-                _ => {}
+                id => {
+                    if let Some(p) = UI.with(|u| u.borrow().as_ref().map(|u| u.lib_pages.clone())) {
+                        crate::libraries::command(&p, hwnd, id);
+                    }
+                }
             }
+            LRESULT(0)
+        }
+        // A library's link, made on a thread: to the clipboard.
+        m if m == WM_APP + 12 => {
+            crate::libraries::link_ready(hwnd);
             LRESULT(0)
         }
         WM_TRAY => {

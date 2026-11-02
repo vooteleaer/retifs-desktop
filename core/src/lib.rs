@@ -286,6 +286,7 @@ impl Daemon {
                 j["own"] = (creator == v.own_writer).into();
                 j["public"] = public.into();
                 j["favorite"] = favorite.into();
+                j["coming"] = v.coming().into();
                 (v.name == saved::ME, !favorite, v.name.to_lowercase(), j)
             })
             .collect();

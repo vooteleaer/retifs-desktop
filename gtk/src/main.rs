@@ -588,7 +588,7 @@ fn show_namespaces(me: &Rc<App>, list: &[NsView]) {
             mark.set_tooltip_text(Some(&format!("Shared: a club of {}", ns.writers.len().max(2))));
             line.append(&mark);
         }
-        if ns.syncing || ns.kept_here < ns.kept {
+        if ns.coming() {
             let coming = gtk::Spinner::builder().spinning(true).tooltip_text("Coming in").build();
             line.append(&coming);
         }

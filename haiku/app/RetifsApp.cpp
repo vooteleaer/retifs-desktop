@@ -233,7 +233,7 @@ public:
 		int64 kept = (int64)library.GetDouble("kept", 0);
 		int64 here = (int64)library.GetDouble("kept_here", 0);
 		bool syncing = library.GetBool("syncing", false);
-		if (syncing || here < kept) {
+		if (library.GetBool("coming", false)) {
 			BStatusBar* bar = new BStatusBar("coming", NULL);
 			bar->SetBarHeight(6);
 			BString text;

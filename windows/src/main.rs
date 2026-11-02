@@ -6,6 +6,8 @@
 
 #[cfg(windows)]
 mod app;
+#[cfg(windows)]
+mod libraries;
 
 #[cfg(windows)]
 fn main() {
