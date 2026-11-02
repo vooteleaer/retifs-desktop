@@ -26,6 +26,12 @@ char* rd_join(const char* address);
 /* Joins the library a retifs: link or invitation names: "" or the error. */
 char* rd_open_link(const char* link);
 char* rd_leave(const char* ns);
+char* rd_members(const char* ns);            /* [{"writer","name","words","role","limits","you","creator"}] */
+char* rd_invite(const char* ns, const char* role, int days);   /* link, or "error: …"; role read|write|invite */
+char* rd_invites(const char* ns);            /* [{"id","role","expires","spent"}] */
+char* rd_cancel_invite(const char* ns, const char* id);
+char* rd_remove_member(const char* ns, const char* writer);
+char* rd_create(const char* name);           /* a new library of this user's */
 char* rd_keep(const char* ns, int all);       /* all: records and content kept here */
 char* rd_link(const char* ns);                /* the library's link, or "" */
 char* rd_announce(const char* ns, int on);

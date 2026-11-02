@@ -321,6 +321,107 @@ impl Daemon {
         self.rt.block_on(saved::set_favorite(&mut c, ns, on))
     }
 
+    /// A library's members, for its owner to see and manage: each writer key
+    /// with `name` (this device, or the contact whose node it is), `words`
+    /// (its fingerprint, three words), `role` ("read", "read and write",
+    /// "read, write and invite"), `limits` (keys, until), `you`, `creator`.
+    /// The creator first, then by name.
+    pub fn members(&self, ns: &str) -> Result<serde_json::Value, String> {
+        let mut c = self.client()?;
+        let v = match self.request(&mut c, Request::NsInfo { ns: ns.into() })? {
+            Response::Namespace(v) => v,
+            _ => return Err("unexpected answer".into()),
+        };
+        let creator = v.address.split(':').nth(2).unwrap_or("").to_string();
+        // Contacts by node: a member's device named as the user named it.
+        let mut contacts: HashMap<String, String> = HashMap::new();
+        for term in [format!("type={}", libretifs::types::PERSON), "type=contact".to_string()] {
+            if let Ok(Response::Records { records }) = self.request(&mut c, Request::Query { ns: saved::ME.into(), terms: vec![term], at: None }) {
+                for r in records {
+                    let get = |k: &str| r.attrs.iter().find_map(|(key, val)| match val {
+                        AttrValue::Str(s) if key == k => Some(s.clone()),
+                        _ => None,
+                    });
+                    if let (Some(name), Some(node)) = (get("name"), get("retifs:node")) {
+                        contacts.insert(node.to_lowercase(), name);
+                    }
+                }
+            }
+        }
+        let nodes: HashMap<&str, &str> = v.nodes.iter().map(|(w, n)| (w.as_str(), n.as_str())).collect();
+        let mut out: Vec<(bool, String, serde_json::Value)> = v
+            .writers
+            .iter()
+            .map(|(w, rights)| {
+                let (plain, limits): (Vec<&String>, Vec<&String>) = rights.iter().partition(|r| *r == "write" || *r == "grant");
+                let role = if plain.iter().any(|r| *r == "grant") {
+                    "read, write and invite"
+                } else if plain.iter().any(|r| *r == "write") {
+                    "read and write"
+                } else {
+                    "read"
+                };
+                let you = *w == v.own_writer;
+                let node = nodes.get(w.as_str()).map(|n| n.to_string());
+                let name = if you {
+                    "This device".to_string()
+                } else {
+                    node.as_ref().and_then(|n| contacts.get(&n.to_lowercase()).cloned()).unwrap_or_default()
+                };
+                let key: Vec<u8> = (0..w.len() / 2).filter_map(|i| u8::from_str_radix(&w[2 * i..2 * i + 2], 16).ok()).collect();
+                let words = retifs_core::words::fingerprint(&key, 3).join(" ");
+                let j = serde_json::json!({
+                    "writer": w, "name": name, "words": words, "role": role, "limits": limits,
+                    "node": node, "you": you, "creator": *w == creator,
+                });
+                (*w != creator, if name.is_empty() { format!("~{words}") } else { name.to_lowercase() }, j)
+            })
+            .collect();
+        out.sort_by(|a, b| (a.0, &a.1).cmp(&(b.0, &b.1)));
+        Ok(serde_json::Value::Array(out.into_iter().map(|(_, _, j)| j).collect()))
+    }
+
+    /// An invitation to library `ns`: `role` "read", "write" or "invite"
+    /// (write and invite others), good for `expires_ms`. Its link.
+    pub fn invite(&self, ns: &str, role: &str, expires_ms: u64) -> Result<String, String> {
+        let mut c = self.client()?;
+        let req = Request::InviteCreate {
+            ns: ns.into(),
+            read: role == "read",
+            grant: role == "invite",
+            keys: Vec::new(),
+            until: None,
+            expires_ms: Some(expires_ms),
+            q: None,
+            label: Some(ns.into()),
+        };
+        match self.request(&mut c, req)? {
+            Response::Link { link } => Ok(link),
+            _ => Err("unexpected answer".into()),
+        }
+    }
+
+    /// The invitations made to library `ns` (pending, used, expired).
+    pub fn invites(&self, ns: &str) -> Result<Vec<libretifs::InviteInfo>, String> {
+        let mut c = self.client()?;
+        match self.request(&mut c, Request::InviteList { ns: ns.into() })? {
+            Response::Invites { invites } => Ok(invites),
+            _ => Err("unexpected answer".into()),
+        }
+    }
+
+    pub fn cancel_invite(&self, ns: &str, id: &str) -> Result<(), String> {
+        let mut c = self.client()?;
+        self.request(&mut c, Request::InviteCancel { ns: ns.into(), id: id.into() }).map(|_| ())
+    }
+
+    /// Removes a member: its writes stop counting, and the read key changes,
+    /// so it can't read what's written from now on (what it read, it keeps).
+    pub fn remove_member(&self, ns: &str, writer: &str) -> Result<(), String> {
+        let mut c = self.client()?;
+        self.request(&mut c, Request::NsRevoke { ns: ns.into(), writer: writer.into() }).map(|_| ())
+    }
+
     /// A new namespace of this user's, `name` (its keys are made here).
     pub fn create_namespace(&self, name: &str) -> Result<(), String> {
         let mut c = self.client()?;

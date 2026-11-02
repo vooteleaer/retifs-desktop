@@ -87,6 +87,58 @@ pub unsafe extern "C" fn rd_leave(ns: *const c_char) -> *mut c_char {
     result(api::leave(&unsafe { arg(ns) }))
 }
 
+/// A library's members: `[{"writer", "name", "words", "role", "limits",
+/// "you", "creator"}]` or `{"error"}`.
+/// # Safety
+/// `ns` is a NUL-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rd_members(ns: *const c_char) -> *mut c_char {
+    out(api::members(&unsafe { arg(ns) }).to_string())
+}
+
+/// An invitation's link (`role`: read, write, invite), or `{"error"}` text
+/// starting with "error: ".
+/// # Safety
+/// `ns` and `role` are NUL-terminated strings.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rd_invite(ns: *const c_char, role: *const c_char, days: c_int) -> *mut c_char {
+    let (ns, role) = unsafe { (arg(ns), arg(role)) };
+    match api::invite(&ns, &role, days.max(1) as u32) {
+        Ok(link) => out(link),
+        Err(e) => out(format!("error: {e}")),
+    }
+}
+
+/// # Safety
+/// `ns` is a NUL-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rd_invites(ns: *const c_char) -> *mut c_char {
+    out(api::invites(&unsafe { arg(ns) }).to_string())
+}
+
+/// # Safety
+/// `ns` and `id` are NUL-terminated strings.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rd_cancel_invite(ns: *const c_char, id: *const c_char) -> *mut c_char {
+    let (ns, id) = unsafe { (arg(ns), arg(id)) };
+    result(api::cancel_invite(&ns, &id))
+}
+
+/// # Safety
+/// `ns` and `writer` are NUL-terminated strings.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rd_remove_member(ns: *const c_char, writer: *const c_char) -> *mut c_char {
+    let (ns, writer) = unsafe { (arg(ns), arg(writer)) };
+    result(api::remove_member(&ns, &writer))
+}
+
+/// # Safety
+/// `name` is a NUL-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rd_create(name: *const c_char) -> *mut c_char {
+    result(api::create(&unsafe { arg(name) }))
+}
+
 /// # Safety
 /// `ns` is a NUL-terminated string.
 #[unsafe(no_mangle)]

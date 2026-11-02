@@ -48,10 +48,49 @@ pub fn leave(ns: &str) -> Result<(), String> {
     Daemon::new().leave(ns)
 }
 
+/// Makes a new library of this user's (its keys made here), named `name`.
+pub fn create(name: &str) -> Result<(), String> {
+    Daemon::new().create_namespace(name)
+}
+
 /// Keeps all of a library here (records and content, readable offline), or
 /// only what's used.
 pub fn keep(ns: &str, all: bool) -> Result<(), String> {
     Daemon::new().keep(ns, all)
+}
+
+/// A library's members (see `Daemon::members`).
+pub fn members(ns: &str) -> Value {
+    Daemon::new().members(ns).unwrap_or_else(|e| json!({ "error": e }))
+}
+
+/// An invitation's link: `role` "read", "write" or "invite", for `days`.
+pub fn invite(ns: &str, role: &str, days: u32) -> Result<String, String> {
+    Daemon::new().invite(ns, role, u64::from(days.max(1)) * 86_400_000)
+}
+
+/// The invitations made to a library: `[{"id", "role", "expires", "spent"}]`.
+pub fn invites(ns: &str) -> Value {
+    match Daemon::new().invites(ns) {
+        Ok(list) => json!(list
+            .iter()
+            .map(|i| json!({
+                "id": i.id,
+                "role": if !i.write { "read" } else if i.grant { "read, write and invite" } else { "read and write" },
+                "expires": i.expires,
+                "spent": i.spent,
+            }))
+            .collect::<Vec<_>>()),
+        Err(e) => json!({ "error": e }),
+    }
+}
+
+pub fn cancel_invite(ns: &str, id: &str) -> Result<(), String> {
+    Daemon::new().cancel_invite(ns, id)
+}
+
+pub fn remove_member(ns: &str, writer: &str) -> Result<(), String> {
+    Daemon::new().remove_member(ns, writer)
 }
 
 /// A library's link (`retifs:ns/…`): whoever has it can read the library.

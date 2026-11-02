@@ -28,13 +28,17 @@
 #include <PopUpMenu.h>
 #include <Roster.h>
 #include <ScrollView.h>
+#include <StatusBar.h>
 #include <SeparatorView.h>
 #include <SpaceLayoutItem.h>
 #include <GroupView.h>
 #include <StringList.h>
 #include <StringView.h>
 #include <TabView.h>
+#include <MenuField.h>
+#include <RadioButton.h>
 #include <TextControl.h>
+#include <TextView.h>
 #include <Window.h>
 #include <image.h>
 
@@ -67,6 +71,19 @@ enum {
 	kAnnounceYes = 'anys',	// the alert's answer
 	kFavorite = 'favo',		// "ns", "on"
 	kTracker = 'trkr',		// "ns": its folder in Tracker
+	kNewLibrary = 'nlib',	// the + button: ask for a new library's name
+	kMembers = 'mbrs',		// a library's members window ("ns")
+	kMembersRead = 'mbrd',	// members window: read them again
+	kMembersRead2 = 'mbr2',	// its worker's answer ("members", "invites")
+	kRemoveMember = 'rmmb',	// "writer", "name": asked first
+	kRemoveYes = 'rmys',
+	kWithdraw = 'wdrw',		// an invitation ("id")
+	kInviteOpen = 'invo',	// the invite window
+	kInviteMake = 'invm',	// make the invitation ("role", "days")
+	kInviteMade = 'invd',	// its link ("link")
+	kInviteCopy = 'invc',
+	kMemberDone = 'mbdn',	// an action's answer ("error")
+	kCreate = 'crea',		// make it ("name", "announce")
 	kJoin = 'join',
 	kOpenLink = 'olnk',
 	kEnable = 'enab',
@@ -212,6 +229,29 @@ public:
 			.Add(title)
 			.Add(_Small(who))
 			.Add(_Small(what));
+		// Coming in: its first sync, or what's kept not all here yet.
+		int64 kept = (int64)library.GetDouble("kept", 0);
+		int64 here = (int64)library.GetDouble("kept_here", 0);
+		bool syncing = library.GetBool("syncing", false);
+		if (syncing || here < kept) {
+			BStatusBar* bar = new BStatusBar("coming", NULL);
+			bar->SetBarHeight(6);
+			BString text;
+			if (syncing && kept == 0) {
+				text = "Fetching its records…";
+				bar->SetMaxValue(1);
+			} else {
+				text << "Fetching " << Grouped(here) << " of " << Grouped(kept)
+					<< " files…";
+				bar->SetMaxValue(kept);
+				bar->Update(here);
+			}
+			bar->SetText(text.String());
+			BFont small(be_plain_font);
+			small.SetSize(small.Size() * 0.85);
+			bar->SetFont(&small);
+			GetLayout()->AddView(bar);
+		}
 	}
 
 	const BMessage& Library() const { return fLibrary; }
@@ -290,7 +330,11 @@ public:
 					error = Result(rd_keep(a.String(), message->GetBool("on", false)));
 				else if (op == "announce")
 					error = Result(rd_announce(a.String(), message->GetBool("on", false)));
-				else if (op == "favorite")
+				else if (op == "create") {
+					error = Result(rd_create(a.String()));
+					if (error.IsEmpty() && message->GetBool("on", false))
+						error = Result(rd_announce(a.String(), 1));
+				} else if (op == "favorite")
 					error = Result(rd_favorite(a.String(), message->GetBool("on", false)));
 				else if (op == "link") {
 					BMessage linked(kLinked);
@@ -324,6 +368,441 @@ public:
 
 private:
 	BMessenger fTarget;
+};
+
+
+// #pragma mark - Members
+
+
+/*! Asks the core about a library's members and invitations, and acts on
+	them, off the window's thread (each call may wait on retifsd). */
+class MembersWorker : public BLooper {
+public:
+	MembersWorker(BMessenger target, const BString& ns)
+		: BLooper("members worker"), fTarget(target), fNs(ns) {}
+
+	void MessageReceived(BMessage* message)
+	{
+		switch (message->what) {
+			case kMembersRead:
+			{
+				BMessage read(kMembersRead2);
+				read.AddMessage("members", new BMessage(Take(rd_members(fNs.String()))));
+				read.AddMessage("invites", new BMessage(Take(rd_invites(fNs.String()))));
+				fTarget.SendMessage(&read);
+				break;
+			}
+			case kInviteMake:
+			{
+				BMessenger reply;
+				message->FindMessenger("reply", &reply);
+				BMessage made(kInviteMade);
+				made.AddString("link", Result(rd_invite(fNs.String(),
+					message->GetString("role", "read"),
+					message->GetInt32("days", 7))));
+				reply.SendMessage(&made);
+				PostMessage(kMembersRead);
+				break;
+			}
+			case kRemoveYes:
+			case kWithdraw:
+			{
+				BMessage done(kMemberDone);
+				done.AddString("error", message->what == kRemoveYes
+					? Result(rd_remove_member(fNs.String(), message->GetString("writer", "")))
+					: Result(rd_cancel_invite(fNs.String(), message->GetString("id", ""))));
+				fTarget.SendMessage(&done);
+				PostMessage(kMembersRead);
+				break;
+			}
+			default:
+				BLooper::MessageReceived(message);
+		}
+	}
+
+private:
+	BMessenger fTarget;
+	BString fNs;
+};
+
+
+/*! An invitation to a library: who it makes the person (a reader, a
+	writer, a writer who may invite), for how long; then its link to pass
+	on. */
+class InviteWindow : public BWindow {
+public:
+	InviteWindow(MembersWorker* worker, const BString& ns)
+		:
+		BWindow(BRect(0, 0, 440, 300), "Invite", B_TITLED_WINDOW,
+			B_AUTO_UPDATE_SIZE_LIMITS | B_NOT_ZOOMABLE | B_CLOSE_ON_ESCAPE),
+		fWorker(worker),
+		fNs(ns)
+	{
+		BString title("Invite someone to ");
+		title << ns;
+		SetTitle(title.String());
+		fRead = new BRadioButton("Read", NULL);
+		fWrite = new BRadioButton("Read and write", NULL);
+		fGrant = new BRadioButton("Read, write and invite others", NULL);
+		fRead->SetValue(B_CONTROL_ON);
+		fDays = new BPopUpMenu("days");
+		const int32 days[] = { 1, 7, 30 };
+		const char* names[] = { "1 day", "1 week", "30 days" };
+		for (int i = 0; i < 3; i++) {
+			BMessage* m = new BMessage('days');
+			m->AddInt32("days", days[i]);
+			BMenuItem* item = new BMenuItem(names[i], m);
+			if (i == 1)
+				item->SetMarked(true);
+			fDays->AddItem(item);
+		}
+		BMenuField* expires = new BMenuField("Usable for:", fDays);
+		fMake = new BButton("Make invitation", new BMessage(kInviteMake));
+		fLink = new BTextView("link");
+		fLink->MakeEditable(false);
+		fLink->SetWordWrap(true);
+		fLink->SetExplicitMinSize(BSize(400, 70));
+		fCopy = new BButton("Copy", new BMessage(kInviteCopy));
+		fCopy->SetEnabled(false);
+		BStringView* note = new BStringView(NULL, "Pass it in person or end to "
+			"end: whoever sees it can read; the first to open it becomes the member.");
+		note->SetTruncation(B_TRUNCATE_END);
+		BLayoutBuilder::Group<>(this, B_VERTICAL)
+			.SetInsets(B_USE_WINDOW_SPACING)
+			.Add(new BStringView(NULL, "They may:"))
+			.Add(fRead)
+			.Add(fWrite)
+			.Add(fGrant)
+			.Add(expires)
+			.AddGroup(B_HORIZONTAL)
+				.AddGlue()
+				.Add(fMake)
+			.End()
+			.Add(new BScrollView("link scroll", fLink, 0, false, false))
+			.Add(note)
+			.AddGroup(B_HORIZONTAL)
+				.AddGlue()
+				.Add(fCopy)
+			.End();
+		CenterOnScreen();
+	}
+
+	void MessageReceived(BMessage* message)
+	{
+		switch (message->what) {
+			case kInviteMake:
+			{
+				BMessage make(kInviteMake);
+				make.AddString("role", fGrant->Value() == B_CONTROL_ON ? "invite"
+					: fWrite->Value() == B_CONTROL_ON ? "write" : "read");
+				BMenuItem* marked = fDays->FindMarked();
+				make.AddInt32("days", marked != NULL
+					? marked->Message()->GetInt32("days", 7) : 7);
+				make.AddMessenger("reply", BMessenger(this));
+				fWorker->PostMessage(&make);
+				fMake->SetEnabled(false);
+				fLink->SetText("Making it…");
+				break;
+			}
+			case kInviteMade:
+			{
+				BString link = message->GetString("link", "");
+				fMake->SetEnabled(true);
+				fLink->SetText(link.String());
+				fCopy->SetEnabled(!link.StartsWith("error"));
+				break;
+			}
+			case kInviteCopy:
+			{
+				BString link(fLink->Text());
+				if (be_clipboard->Lock()) {
+					be_clipboard->Clear();
+					be_clipboard->Data()->AddData("text/plain", B_MIME_TYPE,
+						link.String(), link.Length());
+					be_clipboard->Commit();
+					be_clipboard->Unlock();
+				}
+				break;
+			}
+			default:
+				BWindow::MessageReceived(message);
+		}
+	}
+
+private:
+	MembersWorker* fWorker;
+	BString fNs;
+	BRadioButton* fRead;
+	BRadioButton* fWrite;
+	BRadioButton* fGrant;
+	BPopUpMenu* fDays;
+	BButton* fMake;
+	BTextView* fLink;
+	BButton* fCopy;
+};
+
+
+/*! A library's members: who reads, who writes, who may invite; its
+	invitations; and, for one who may invite, inviting and removing. */
+class MembersWindow : public BWindow {
+public:
+	MembersWindow(const BString& ns, bool manage)
+		:
+		BWindow(BRect(0, 0, 520, 440), "Members", B_TITLED_WINDOW,
+			B_AUTO_UPDATE_SIZE_LIMITS | B_CLOSE_ON_ESCAPE),
+		fNs(ns),
+		fManage(manage)
+	{
+		BString title("Members of ");
+		title << ns;
+		SetTitle(title.String());
+		fList = new BGroupView(B_VERTICAL, 4);
+		BView* area = new BView("members area", 0);
+		BLayoutBuilder::Group<>(area, B_VERTICAL, 0)
+			.Add(fList)
+			.AddGlue();
+		float em = be_plain_font->Size();
+		area->SetExplicitMinSize(BSize(em * 30, em * 16));
+		BStringView* note = new BStringView(NULL, "Removing someone: they keep "
+			"what they've seen, not what's written from then on.");
+		note->SetTruncation(B_TRUNCATE_END);
+		fInvite = new BButton("Invite…", new BMessage(kInviteOpen));
+		fInvite->SetEnabled(manage);
+		BLayoutBuilder::Group<>(this, B_VERTICAL)
+			.SetInsets(B_USE_WINDOW_SPACING)
+			.Add(new BScrollView("members", area, 0, false, true, B_NO_BORDER))
+			.Add(note)
+			.AddGroup(B_HORIZONTAL)
+				.AddGlue()
+				.Add(fInvite)
+			.End();
+		fWorker = new MembersWorker(BMessenger(this), ns);
+		fWorker->Run();
+		fWorker->PostMessage(kMembersRead);
+		CenterOnScreen();
+	}
+
+	~MembersWindow()
+	{
+		fWorker->Lock();
+		fWorker->Quit();
+	}
+
+	void MessageReceived(BMessage* message)
+	{
+		switch (message->what) {
+			case kMembersRead2:
+				_Fill(*message);
+				break;
+			case kInviteOpen:
+				(new InviteWindow(fWorker, fNs))->Show();
+				break;
+			case kRemoveMember:
+			{
+				fRemoving = message->GetString("writer", "");
+				BString text;
+				text << "Remove " << message->GetString("name", "") << " from "
+					<< fNs << "?\n\nWhat they write stops counting, and the "
+					"library's key changes: they keep what they've read, but "
+					"can't read what's written from now on.";
+				BAlert* alert = new BAlert("Remove", text.String(), "Cancel",
+					"Remove", NULL, B_WIDTH_AS_USUAL, B_WARNING_ALERT);
+				alert->SetShortcut(0, B_ESCAPE);
+				alert->Go(new BInvoker(new BMessage(kRemoveYes), this));
+				break;
+			}
+			case kRemoveYes:
+				if (message->GetInt32("which", 0) == 1 && !fRemoving.IsEmpty()) {
+					BMessage remove(kRemoveYes);
+					remove.AddString("writer", fRemoving);
+					fWorker->PostMessage(&remove);
+				}
+				fRemoving = "";
+				break;
+			case kWithdraw:
+				fWorker->PostMessage(message);
+				break;
+			case kMemberDone:
+			{
+				BString error = message->GetString("error", "");
+				if (!error.IsEmpty())
+					(new BAlert("retifs", error.String(), "OK", NULL, NULL,
+						B_WIDTH_AS_USUAL, B_WARNING_ALERT))->Go(NULL);
+				break;
+			}
+			default:
+				BWindow::MessageReceived(message);
+		}
+	}
+
+private:
+	static BStringView* _Small(const BString& text)
+	{
+		BStringView* v = new BStringView(NULL, text.String());
+		BFont small(be_plain_font);
+		small.SetSize(small.Size() * 0.85);
+		v->SetFont(&small);
+		v->SetHighColor(mix_color(ui_color(B_PANEL_TEXT_COLOR),
+			ui_color(B_PANEL_BACKGROUND_COLOR), 150));
+		v->SetTruncation(B_TRUNCATE_END);
+		return v;
+	}
+
+	/*! A row: a name over its details, a button at its right. */
+	BView* _Row(const BString& name, const BString& detail, BButton* button)
+	{
+		BStringView* title = new BStringView(NULL, name.String());
+		title->SetFont(be_bold_font);
+		title->SetTruncation(B_TRUNCATE_END);
+		BGroupView* row = new BGroupView(B_HORIZONTAL, B_USE_SMALL_SPACING);
+		BLayoutBuilder::Group<>(row)
+			.SetInsets(B_USE_SMALL_SPACING)
+			.AddGroup(B_VERTICAL, 0)
+				.Add(title)
+				.Add(_Small(detail))
+			.End()
+			.AddGlue();
+		if (button != NULL)
+			row->AddChild(button);
+		row->SetExplicitMaxSize(BSize(B_SIZE_UNLIMITED, B_SIZE_UNSET));
+		return row;
+	}
+
+	void _Fill(const BMessage& message)
+	{
+		BMessage members, invites;
+		message.FindMessage("members", &members);
+		message.FindMessage("invites", &invites);
+		while (fList->CountChildren() > 0) {
+			BView* v = fList->ChildAt(0);
+			fList->RemoveChild(v);
+			delete v;
+		}
+		if (members.HasString("error")) {
+			fList->AddChild(new BStringView(NULL, members.GetString("error", "")));
+			return;
+		}
+		for (int32 i = 0; i < Count(members); i++) {
+			BMessage m = Item(members, i);
+			BString name = m.GetString("name", "");
+			BString words = m.GetString("words", "");
+			if (name.IsEmpty())
+				name = words;
+			BString detail = m.GetString("role", "");
+			if (m.GetBool("creator", false))
+				detail << "  ·  made it";
+			BMessage limits;
+			if (m.FindMessage("limits", &limits) == B_OK) {
+				for (int32 j = 0; j < Count(limits); j++) {
+					BString index;
+					index << j;
+					detail << "  ·  " << limits.GetString(index.String(), "");
+				}
+			}
+			if (name != words)
+				detail << "  ·  " << words;
+			BButton* remove = NULL;
+			if (fManage && !m.GetBool("you", false) && !m.GetBool("creator", false)) {
+				BMessage* ask = new BMessage(kRemoveMember);
+				ask->AddString("writer", m.GetString("writer", ""));
+				ask->AddString("name", name);
+				remove = new BButton("Remove", ask);
+				remove->SetTarget(this);
+			}
+			fList->AddChild(_Row(name, detail, remove));
+		}
+		// Invitations not used yet (used ones are members above).
+		bool heading = false;
+		bigtime_t now = real_time_clock() * (bigtime_t)1000;
+		for (int32 i = 0; i < Count(invites) && !invites.HasString("error"); i++) {
+			BMessage inv = Item(invites, i);
+			if (inv.GetBool("spent", false))
+				continue;
+			if (!heading) {
+				fList->AddChild(new BSeparatorView(B_HORIZONTAL));
+				BStringView* h = new BStringView(NULL, "Invitations not used yet");
+				h->SetFont(be_bold_font);
+				h->SetExplicitMaxSize(BSize(B_SIZE_UNLIMITED, B_SIZE_UNSET));
+				fList->AddChild(h);
+				heading = true;
+			}
+			double expires = inv.GetDouble("expires", 0);
+			BString detail(inv.GetString("role", ""));
+			if (expires < now)
+				detail << "  ·  expired";
+			else
+				detail << "  ·  " << (int32)((expires - now) / 3600000) << " h left";
+			BMessage* withdraw = new BMessage(kWithdraw);
+			withdraw->AddString("id", inv.GetString("id", ""));
+			BButton* button = new BButton("Withdraw", withdraw);
+			button->SetTarget(this);
+			fList->AddChild(_Row(BString("Invitation ") << BString(inv.GetString("id", ""), 8),
+				detail, button));
+		}
+	}
+
+	BString fNs;
+	bool fManage;
+	BGroupView* fList;
+	BButton* fInvite;
+	MembersWorker* fWorker;
+	BString fRemoving;
+};
+
+
+// #pragma mark - New library
+
+
+/*! A new library: its name, and whether to announce it as public. */
+class NewLibraryWindow : public BWindow {
+public:
+	NewLibraryWindow(BMessenger target)
+		:
+		BWindow(BRect(0, 0, 360, 140), "New library", B_TITLED_WINDOW,
+			B_AUTO_UPDATE_SIZE_LIMITS | B_NOT_ZOOMABLE | B_NOT_RESIZABLE
+				| B_CLOSE_ON_ESCAPE),
+		fTarget(target)
+	{
+		fName = new BTextControl("Name:", "", NULL);
+		fPublic = new BCheckBox("Announce it on the network (public: anyone "
+			"may read it)", NULL);
+		BButton* create = new BButton("Create", new BMessage(kCreate));
+		BLayoutBuilder::Group<>(this, B_VERTICAL)
+			.SetInsets(B_USE_WINDOW_SPACING)
+			.Add(fName)
+			.Add(fPublic)
+			.Add(new BStringView(NULL, "A private one is shared from its menu "
+				"(right-click)."))
+			.AddGroup(B_HORIZONTAL)
+				.AddGlue()
+				.Add(new BButton("Cancel", new BMessage(B_QUIT_REQUESTED)))
+				.Add(create)
+			.End();
+		SetDefaultButton(create);
+		fName->MakeFocus(true);
+		CenterOnScreen();
+	}
+
+	void MessageReceived(BMessage* message)
+	{
+		if (message->what == kCreate) {
+			BString name(fName->Text());
+			if (name.Trim().IsEmpty())
+				return;
+			BMessage create(kCreate);
+			create.AddString("name", name);
+			create.AddBool("announce", fPublic->Value() == B_CONTROL_ON);
+			fTarget.SendMessage(&create);
+			Quit();
+			return;
+		}
+		BWindow::MessageReceived(message);
+	}
+
+private:
+	BMessenger fTarget;
+	BTextControl* fName;
+	BCheckBox* fPublic;
 };
 
 
@@ -455,6 +934,22 @@ public:
 				be_clipboard->Unlock();
 				break;
 			}
+			case kNewLibrary:
+				(new NewLibraryWindow(BMessenger(this)))->Show();
+				break;
+			case kMembers:
+				(new MembersWindow(message->GetString("ns", ""),
+					message->GetBool("manage", false)))->Show();
+				break;
+			case kCreate:
+			{
+				BMessage act(kAct);
+				act.AddString("op", "create");
+				act.AddString("a", message->GetString("name", ""));
+				act.AddBool("on", message->GetBool("announce", false));
+				fWorker->PostMessage(&act);
+				break;
+			}
 			case kTracker:
 			{
 				BPath path;
@@ -546,7 +1041,11 @@ private:
 				.AddGlue()
 			.End()
 			.Add(new BSeparatorView(B_HORIZONTAL))
-			.Add(_Heading("Libraries"))
+			.AddGroup(B_HORIZONTAL)
+				.Add(_Heading("Libraries"))
+				.AddGlue()
+				.Add(new BButton("new library", "+", new BMessage(kNewLibrary)))
+			.End()
 			.Add(new BScrollView("ls", libraryArea, 0, false, true,
 				B_NO_BORDER));
 		return view;
@@ -867,6 +1366,9 @@ public:
 		add(l.GetBool("public", false) ? "Copy link"
 			: "Copy link (whoever has it can read)", kCopyLink, NULL, false,
 			false, !me);
+		// Who may invite: its creator, or a member granted "invite".
+		bool invites = BString(l.GetString("access", "")).FindFirst("invite") >= 0;
+		add("Members…", kMembers, "manage", invites, false, !me);
 		if (own && !me) {
 			bool announced = l.GetBool("announced", false);
 			add(announced ? "Stop announcing" : "Announce on the network…",
@@ -917,7 +1419,9 @@ private:
 				<< "|" << l.GetDouble("peers", 0) << "|" << l.GetBool("lazy", false)
 				<< "|" << l.GetString("keep", "") << "|" << l.GetString("access", "")
 				<< "|" << l.GetBool("public", false) << "|" << l.GetBool("favorite", false)
-				<< "|" << l.GetBool("announced", false) << "\n";
+				<< "|" << l.GetBool("announced", false) << "|" << l.GetDouble("kept", 0)
+				<< "|" << l.GetDouble("kept_here", 0) << "|" << l.GetBool("syncing", false)
+				<< "\n";
 		}
 		if (key == fLibrariesKey)
 			return;
