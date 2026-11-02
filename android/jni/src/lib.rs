@@ -101,3 +101,76 @@ pub extern "system" fn Java_org_retifs_desktop_Core_saveSettings<'l>(mut env: JN
     let r = api::save_settings(&values);
     result(&mut env, r)
 }
+
+// Libraries: what can be done with one, members and invitations (as the
+// Haiku, GTK and Windows utilities).
+
+#[no_mangle]
+pub extern "system" fn Java_org_retifs_desktop_Core_create<'l>(mut env: JNIEnv<'l>, _: JClass<'l>, name: JString<'l>, public: jboolean) -> jstring {
+    let name = arg(&mut env, &name);
+    let r = api::create(&name).and_then(|()| if public == JNI_TRUE { api::announce(&name, true) } else { Ok(()) });
+    result(&mut env, r)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_org_retifs_desktop_Core_keep<'l>(mut env: JNIEnv<'l>, _: JClass<'l>, ns: JString<'l>, all: jboolean) -> jstring {
+    let ns = arg(&mut env, &ns);
+    let r = api::keep(&ns, all == JNI_TRUE);
+    result(&mut env, r)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_org_retifs_desktop_Core_favorite<'l>(mut env: JNIEnv<'l>, _: JClass<'l>, ns: JString<'l>, on: jboolean) -> jstring {
+    let ns = arg(&mut env, &ns);
+    let r = api::favorite(&ns, on == JNI_TRUE);
+    result(&mut env, r)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_org_retifs_desktop_Core_announce<'l>(mut env: JNIEnv<'l>, _: JClass<'l>, ns: JString<'l>, on: jboolean) -> jstring {
+    let ns = arg(&mut env, &ns);
+    let r = api::announce(&ns, on == JNI_TRUE);
+    result(&mut env, r)
+}
+
+/// A library's link, or "error: …".
+#[no_mangle]
+pub extern "system" fn Java_org_retifs_desktop_Core_link<'l>(mut env: JNIEnv<'l>, _: JClass<'l>, ns: JString<'l>) -> jstring {
+    let ns = arg(&mut env, &ns);
+    let r = api::link(&ns).unwrap_or_else(|e| format!("error: {e}"));
+    out(&mut env, r)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_org_retifs_desktop_Core_members<'l>(mut env: JNIEnv<'l>, _: JClass<'l>, ns: JString<'l>) -> jstring {
+    let ns = arg(&mut env, &ns);
+    out(&mut env, api::members(&ns).to_string())
+}
+
+#[no_mangle]
+pub extern "system" fn Java_org_retifs_desktop_Core_invites<'l>(mut env: JNIEnv<'l>, _: JClass<'l>, ns: JString<'l>) -> jstring {
+    let ns = arg(&mut env, &ns);
+    out(&mut env, api::invites(&ns).to_string())
+}
+
+/// An invitation's link (`role`: read, write, invite), or "error: …".
+#[no_mangle]
+pub extern "system" fn Java_org_retifs_desktop_Core_invite<'l>(mut env: JNIEnv<'l>, _: JClass<'l>, ns: JString<'l>, role: JString<'l>, days: jint) -> jstring {
+    let (ns, role) = (arg(&mut env, &ns), arg(&mut env, &role));
+    let r = api::invite(&ns, &role, days.max(1) as u32).unwrap_or_else(|e| format!("error: {e}"));
+    out(&mut env, r)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_org_retifs_desktop_Core_cancelInvite<'l>(mut env: JNIEnv<'l>, _: JClass<'l>, ns: JString<'l>, id: JString<'l>) -> jstring {
+    let (ns, id) = (arg(&mut env, &ns), arg(&mut env, &id));
+    let r = api::cancel_invite(&ns, &id);
+    result(&mut env, r)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_org_retifs_desktop_Core_removeMember<'l>(mut env: JNIEnv<'l>, _: JClass<'l>, ns: JString<'l>, writer: JString<'l>) -> jstring {
+    let (ns, writer) = (arg(&mut env, &ns), arg(&mut env, &writer));
+    let r = api::remove_member(&ns, &writer);
+    result(&mut env, r)
+}

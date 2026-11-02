@@ -25,6 +25,18 @@ object Core {
     external fun heard(): String
     external fun join(address: String): String
     external fun leave(ns: String): String
+    external fun create(name: String, public: Boolean): String
+    external fun keep(ns: String, all: Boolean): String
+    external fun favorite(ns: String, on: Boolean): String
+    external fun announce(ns: String, on: Boolean): String
+    /** A library's link, or "error: …". */
+    external fun link(ns: String): String
+    external fun members(ns: String): String
+    external fun invites(ns: String): String
+    /** An invitation's link (role: read, write, invite), or "error: …". */
+    external fun invite(ns: String, role: String, days: Int): String
+    external fun cancelInvite(ns: String, id: String): String
+    external fun removeMember(ns: String, writer: String): String
 
     /** Where everything lives for this app. */
     class Paths(context: Context) {

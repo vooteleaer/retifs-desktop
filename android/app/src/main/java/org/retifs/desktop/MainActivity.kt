@@ -138,6 +138,8 @@ fun Overview(s: JSONObject, said: (String) -> Unit) {
     val scope = rememberCoroutineScope()
     var heard by remember { mutableStateOf(JSONArray()) }
     var heardError by remember { mutableStateOf("") }
+    var newLibrary by remember { mutableStateOf(false) }
+    if (newLibrary) NewLibraryDialog(said) { newLibrary = false }
     LaunchedEffect(s) {
         val answer = core { Core.heard() }
         if (answer.startsWith("[")) {
@@ -176,28 +178,16 @@ fun Overview(s: JSONObject, said: (String) -> Unit) {
             }
         }
         val libraries = s.optJSONArray("libraries") ?: JSONArray()
-        item { Text("Libraries", style = MaterialTheme.typography.titleSmall) }
+        item {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Libraries", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                IconButton(onClick = { newLibrary = true }) { Icon(Icons.Filled.Add, "New library") }
+            }
+        }
         if (libraries.length() == 0) {
             item { Text("None yet.", style = MaterialTheme.typography.bodySmall) }
         }
-        items((0 until libraries.length()).map { libraries.getJSONObject(it) }) { l ->
-            Card(Modifier.fillMaxWidth()) {
-                Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text(l.optString("name"), style = MaterialTheme.typography.titleMedium)
-                        val how = if (l.optBoolean("lazy")) "fetched as needed" else "held here"
-                        Text("${l.optInt("records")} record(s) · ${l.optInt("peers")} peer(s) · $how", style = MaterialTheme.typography.bodySmall)
-                    }
-                    // Joined (made elsewhere: the address names another creator) can be left.
-                    val creator = l.optString("address").split(":").getOrNull(2)
-                    if (creator != null && creator != l.optString("own_writer")) {
-                        TextButton(onClick = {
-                            scope.launch { said(core { Core.leave(l.optString("name")) }.ifEmpty { "Left ${l.optString("name")}" }) }
-                        }) { Text("Leave") }
-                    }
-                }
-            }
-        }
+        items((0 until libraries.length()).map { libraries.getJSONObject(it) }) { l -> LibraryCard(l, said) }
         item { Text("Heard on the network", style = MaterialTheme.typography.titleSmall) }
         if (heardError.isNotEmpty()) {
             item { Text(heardError, style = MaterialTheme.typography.bodySmall) }
