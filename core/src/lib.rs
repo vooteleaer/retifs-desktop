@@ -15,7 +15,7 @@ pub mod status_icon;
 
 use std::{collections::HashMap, path::PathBuf};
 
-pub use libretifs::{saved::SavedQuery, AttrValue, NsView, RecordView, StoreUsage};
+pub use libretifs::{saved::SavedQuery, AttrValue, HeardLibrary, InviteInfo, NsView, RecordView, StoreUsage};
 use libretifs::{saved, Client, Request, Response};
 
 /// One record a search found, and where.

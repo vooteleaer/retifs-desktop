@@ -7,6 +7,7 @@
 
 mod device;
 mod find;
+mod library;
 #[cfg(target_os = "linux")]
 mod tray;
 
@@ -69,7 +70,18 @@ struct App {
     node: RefCell<Option<String>>,
     saved: RefCell<Vec<(SavedQuery, Vec<String>, usize)>>,
     views: RefCell<Vec<NsView>>,
+    /// `Daemon::libraries`: access, public, favourite, by library.
+    libs: RefCell<Vec<serde_json::Value>>,
     shown: RefCell<Option<String>>,
+    window: adw::ApplicationWindow,
+    announces: RefCell<Option<adw::PreferencesGroup>>,
+    announce_rows: RefCell<Vec<adw::ActionRow>>,
+}
+
+impl App {
+    fn window(&self) -> adw::ApplicationWindow {
+        self.window.clone()
+    }
 }
 
 fn build(app: &adw::Application, hidden: bool) {
@@ -111,6 +123,7 @@ fn build(app: &adw::Application, hidden: bool) {
     side_top.append(&label("Overview"));
     side_top.append(&label("Find"));
     side_top.append(&label("This device"));
+    side_top.append(&label("Announces"));
     let saved_head = gtk::Label::builder().label("Saved searches").xalign(0.0).margin_start(18).margin_top(12).margin_bottom(4).build();
     saved_head.add_css_class("dim-label");
     saved_head.add_css_class("caption-heading");
@@ -166,8 +179,15 @@ fn build(app: &adw::Application, hidden: bool) {
         node: RefCell::new(None),
         saved: RefCell::new(Vec::new()),
         views: RefCell::new(Vec::new()),
+        libs: RefCell::new(Vec::new()),
         shown: RefCell::new(None),
+        window: window.clone(),
+        announces: RefCell::new(None),
+        announce_rows: RefCell::new(Vec::new()),
     });
+    let announces = library::announces_page(&me);
+    me.stack.add_named(&announces, Some("announces"));
+    library::add_actions(&me, &window);
 
     {
         let me = me.clone();
@@ -182,6 +202,10 @@ fn build(app: &adw::Application, hidden: bool) {
                 me.title.set_title("This device");
                 me.stack.set_visible_child_name("device");
                 me.device.refresh();
+            } else if row.index() == 3 {
+                me.title.set_title("Announces");
+                me.stack.set_visible_child_name("announces");
+                library::fill_announces(&me);
             } else {
                 me.title.set_title("Overview");
                 me.stack.set_visible_child_name("overview");
@@ -397,12 +421,29 @@ fn show_status(o: &Overview, s: &Status) {
 
 fn reload(me: &Rc<App>) {
     let me2 = me.clone();
-    bg(&me.daemon, |d| (d.namespaces(), d.saved()), move |(r, saved)| {
+    bg(&me.daemon, |d| (d.namespaces(), d.saved(), d.libraries()), move |(r, saved, libs)| {
         let list = r.unwrap_or_default();
+        if let Ok(serde_json::Value::Array(libs)) = libs {
+            *me2.libs.borrow_mut() = libs;
+        }
         me2.find.set_namespaces(list.iter().map(|v| v.name.clone()).filter(|n| n != "me").collect());
         show_saved(&me2, saved);
         show_namespaces(&me2, &list);
         *me2.views.borrow_mut() = list;
+        // RETIFS_DESKTOP_OPEN=lib:<name> or =announces: open it on start (demos, screenshots).
+        thread_local! { static OPENED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
+        if !OPENED.with(|o| o.replace(true)) {
+            match std::env::var("RETIFS_DESKTOP_OPEN").ok().as_deref() {
+                Some(o) if o.starts_with("lib:") => open_ns(&me2, &o[4..]),
+                Some("announces") => {
+                    if let Some(row) = me2.side_top.row_at_index(3) {
+                        me2.side_top.select_row(Some(&row));
+                        row.activate();
+                    }
+                }
+                _ => {}
+            }
+        }
         // A namespace on screen is redrawn with what's new.
         let shown = me2.shown.borrow().clone();
         if let Some(name) = shown {
@@ -520,7 +561,12 @@ fn show_namespaces(me: &Rc<App>, list: &[NsView]) {
     }
     let selected = me.side_ns.selected_row().map(|r| r.widget_name().to_string());
     me.side_ns.remove_all();
-    for ns in list {
+    // Favourites first, `me` last (Daemon::libraries' order).
+    let order: Vec<String> = me.libs.borrow().iter().filter_map(|l| l["name"].as_str().map(String::from)).collect();
+    let mut list: Vec<&NsView> = list.iter().collect();
+    list.sort_by_key(|ns| order.iter().position(|n| *n == ns.name).unwrap_or(usize::MAX));
+    for ns in list.iter().copied() {
+        let favorite = me.libs.borrow().iter().any(|l| l["name"] == ns.name.as_str() && l["favorite"].as_bool().unwrap_or(false));
         let row = adw::ActionRow::builder()
             .title(&ns.name)
             .subtitle(format!("{} members · {} peers · {}", ns.writers.len(), ns.peers, keeps(ns).to_lowercase()))
@@ -533,7 +579,7 @@ fn show_namespaces(me: &Rc<App>, list: &[NsView]) {
         o.ns_rows.borrow_mut().push(row);
 
         let line = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        let name = label(&ns.name);
+        let name = label(&if favorite { format!("★ {}", ns.name) } else { ns.name.clone() });
         name.set_hexpand(true);
         line.append(&name);
         if is_club(ns) {
@@ -542,8 +588,29 @@ fn show_namespaces(me: &Rc<App>, list: &[NsView]) {
             mark.set_tooltip_text(Some(&format!("Shared: a club of {}", ns.writers.len().max(2))));
             line.append(&mark);
         }
+        if ns.syncing || ns.kept_here < ns.kept {
+            let coming = gtk::Spinner::builder().spinning(true).tooltip_text("Coming in").build();
+            line.append(&coming);
+        }
         let item = gtk::ListBoxRow::builder().child(&line).build();
         item.set_widget_name(&format!("ns:{}", ns.name));
+        // Right-click: what can be done with it.
+        let click = gtk::GestureClick::builder().button(3).build();
+        {
+            let (me2, name, item2) = (me.clone(), ns.name.clone(), item.clone());
+            click.connect_pressed(move |_, _, x, y| {
+                let pop = gtk::PopoverMenu::from_model(Some(&library::menu(&me2, &name)));
+                pop.set_parent(&item2);
+                pop.set_has_arrow(false);
+                pop.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+                pop.connect_closed(|p| {
+                    let p = p.clone();
+                    glib::idle_add_local_once(move || p.unparent());
+                });
+                pop.popup();
+            });
+        }
+        item.add_controller(click);
         me.side_ns.append(&item);
         if selected.as_deref() == Some(item.widget_name().as_str()) {
             me.side_ns.select_row(Some(&item));
@@ -571,63 +638,12 @@ fn open_ns(me: &Rc<App>, name: &str) {
     me.stack.set_visible_child_name("namespace");
 }
 
-/// A row with a value the user may want to copy (an address, a key).
-fn copy_row(title: &str, value: &str) -> adw::ActionRow {
-    let row = adw::ActionRow::builder().title(title).subtitle(value).subtitle_selectable(true).build();
-    let button = gtk::Button::from_icon_name("edit-copy-symbolic");
-    button.set_valign(gtk::Align::Center);
-    button.add_css_class("flat");
-    button.set_tooltip_text(Some("Copy"));
-    let value = value.to_string();
-    button.connect_clicked(move |b| {
-        b.clipboard().set_text(&value);
-    });
-    row.add_suffix(&button);
-    row
-}
-
-/// A namespace's management page, from its view.
+/// A library's page, from its view (the library module's).
 fn show_ns(me: &Rc<App>, name: &str) {
     let views = me.views.borrow();
     let Some(ns) = views.iter().find(|v| v.name == name) else {
         me.ns_page.set_child(Some(&adw::StatusPage::builder().title(name).description("Not found on this node.").build()));
         return;
     };
-    let page = adw::PreferencesPage::new();
-
-    let sharing = adw::PreferencesGroup::builder()
-        .title("Sharing")
-        .description("Anyone with this address can read it. To let someone write, grant their writer key below (invitations come later).")
-        .build();
-    sharing.add(&copy_row("Address", &ns.address));
-    page.add(&sharing);
-
-    let members = adw::PreferencesGroup::builder().title("Members").build();
-    for (writer, rights) in &ns.writers {
-        let mut title = format!("{}…", &writer[..16.min(writer.len())]);
-        if *writer == ns.own_writer {
-            title.push_str("  (this node)");
-        }
-        let row = copy_row(&title, writer);
-        row.set_subtitle(&rights.join(", "));
-        row.set_tooltip_text(Some(writer));
-        members.add(&row);
-    }
-    page.add(&members);
-
-    let device = adw::PreferencesGroup::builder().title("On this device").build();
-    device.add(&adw::ActionRow::builder().title(keeps(ns)).subtitle(format!("{} file(s) pulled here because they're kept", ns.kept)).build());
-    device.add(&adw::ActionRow::builder().title("Device name").subtitle(&ns.device).build());
-    device.add(&adw::ActionRow::builder().title("Peers").subtitle(format!("{} node(s) this one syncs with", ns.peers)).build());
-    page.add(&device);
-
-    let state = adw::PreferencesGroup::builder().title("State").build();
-    state.add(&adw::ActionRow::builder().title("Records").subtitle(ns.records.to_string()).build());
-    match &ns.checkpoint {
-        Some(cp) => state.add(&copy_row("Checkpoint", cp)),
-        None => state.add(&adw::ActionRow::builder().title("Checkpoint").subtitle("None yet").build()),
-    }
-    page.add(&state);
-
-    me.ns_page.set_child(Some(&page));
+    me.ns_page.set_child(Some(&library::page(me, ns)));
 }
