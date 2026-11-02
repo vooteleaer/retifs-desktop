@@ -206,6 +206,7 @@ public:
 					? "kept on this device" : "content fetched as needed");
 
 		float em = be_plain_font->Size();
+		SetExplicitMaxSize(BSize(B_SIZE_UNLIMITED, B_SIZE_UNSET));
 		BLayoutBuilder::Group<>(this, B_VERTICAL, 0)
 			.SetInsets(em * 0.6, em * 0.35, em * 0.6, em * 0.45)
 			.Add(title)
@@ -526,6 +527,9 @@ private:
 		BLayoutBuilder::Group<>(libraryArea, B_VERTICAL, 0)
 			.Add(fLibraries)
 			.AddGlue();
+		// Scrolled, not as tall as all of them: the window stays its size.
+		float em = be_plain_font->Size();
+		libraryArea->SetExplicitMinSize(BSize(em * 24, em * 10));
 		AddCommonFilter(new BMessageFilter(B_MOUSE_DOWN, &_RightClick));
 
 		BView* view = new BView("This device", 0);
