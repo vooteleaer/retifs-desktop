@@ -164,7 +164,15 @@ impl Daemon {
             _ => Vec::new(),
         };
         let name = std::iter::once(base.clone()).chain((2..).map(|i| format!("{base}-{i}"))).find(|n| !taken.contains(n)).expect("a free name");
-        self.request(&mut c, Request::NsJoin { ns: name.clone(), address: l.address.clone(), from: vec![l.node.clone()], lazy: true }).map(|_| name)
+        // A map (ADR-0028): its index held whole (its tiles' records, small),
+        // so a tile is found here at once; its tiles fetched as looked at.
+        // Anything else lazily.
+        let map = l.has.iter().any(|(t, _)| t == "application/x-vnd.retifs.tileset" || t == "application/vnd.mapbox-vector-tile");
+        self.request(&mut c, Request::NsJoin { ns: name.clone(), address: l.address.clone(), from: vec![l.node.clone()], lazy: !map })?;
+        if map {
+            self.request(&mut c, Request::NsKeep { ns: name.clone(), mode: "rules".into() })?;
+        }
+        Ok(name)
     }
 
     /// Leaves a library on this device (others keep their copies).
