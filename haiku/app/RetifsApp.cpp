@@ -26,6 +26,8 @@
 #include <Roster.h>
 #include <ScrollView.h>
 #include <SeparatorView.h>
+#include <SpaceLayoutItem.h>
+#include <GroupView.h>
 #include <StringList.h>
 #include <StringView.h>
 #include <TabView.h>
@@ -222,6 +224,7 @@ public:
 	{
 		fTabs = new BTabView("tabs");
 		fTabs->AddTab(_BuildOverview());
+		fTabs->AddTab(_BuildAnnounces());
 		fTabs->AddTab(_BuildNetwork());
 		fTabs->AddTab(_BuildSettings());
 
@@ -278,8 +281,15 @@ public:
 				_Act("leave", _Selected(fLibraries, fLibraryNames));
 				break;
 			case kJoin:
-				_Act("join", _Selected(fHeard, fHeardAddresses));
+			{
+				BButton* b = NULL;
+				if (message->FindPointer("source", (void**)&b) == B_OK && b != NULL) {
+					b->SetLabel("Joining…");
+					b->SetEnabled(false);
+				}
+				_Act("join", message->GetString("address", ""));
 				break;
+			}
 			case kOpenLink:
 			{
 				BString link(fLink->Text());
@@ -326,8 +336,6 @@ private:
 		fUsage = new BStringView("usage", "");
 		fUsage2 = new BStringView("usage2", "");
 		fLibraries = new BListView("libraries");
-		fHeard = new BListView("heard");
-		fLink = new BTextControl("Link", "A library's link (retifs:…)", "", NULL);
 
 		BView* view = new BView("This device", 0);
 		BLayoutBuilder::Group<>(view, B_VERTICAL)
@@ -348,19 +356,174 @@ private:
 			.AddGroup(B_HORIZONTAL)
 				.AddGlue()
 				.Add(new BButton("Leave", new BMessage(kLeave)))
-			.End()
-			.Add(new BStringView("h", "Heard on the network"))
-			.Add(new BScrollView("hs", fHeard, 0, false, true))
-			.AddGroup(B_HORIZONTAL)
-				.AddGlue()
-				.Add(new BButton("Join", new BMessage(kJoin)))
-			.End()
+			.End();
+		return view;
+	}
+
+	/*! Announces, as in LXMF apps: the public libraries heard on the
+		network, what each holds, from where, each with Join; and a library
+		added from its link. */
+	BView* _BuildAnnounces()
+	{
+		fAnnounceList = new BGroupView(B_VERTICAL, B_USE_DEFAULT_SPACING);
+		fAnnounceList->GroupLayout()->SetInsets(B_USE_DEFAULT_SPACING);
+		fAnnounceList->SetViewUIColor(B_DOCUMENT_BACKGROUND_COLOR);
+		BScrollView* scroll = new BScrollView("as", fAnnounceList, 0, false, true);
+		scroll->SetExplicitMinSize(BSize(480, 260));
+		fLink = new BTextControl("Link", "A library's link (retifs:…)", "", NULL);
+
+		BView* view = new BView("Announces", 0);
+		BLayoutBuilder::Group<>(view, B_VERTICAL)
+			.SetInsets(B_USE_DEFAULT_SPACING)
+			.Add(new BStringView("ai", "Public libraries heard on the network. "
+				"Joining fetches only what you look at."))
+			.Add(scroll)
 			.Add(new BSeparatorView(B_HORIZONTAL))
 			.AddGroup(B_HORIZONTAL)
 				.Add(fLink)
 				.Add(new BButton("Add library", new BMessage(kOpenLink)))
 			.End();
 		return view;
+	}
+
+	/*! "map · 38822 places · 120 photos · 40 records": what a library holds. */
+	static BString _Holds(const BMessage& has)
+	{
+		BString out;
+		int64 rest = 0;
+		for (int32 i = 0; i < Count(has); i++) {
+			BMessage pair = Item(has, i);
+			BString type = pair.GetString("0", "");
+			int64 n = (int64)pair.GetDouble("1", 0);
+			BString word;
+			if (type == "application/x-vnd.retifs.tileset")
+				word = "map";
+			else if (type == "application/vnd.mapbox-vector-tile")
+				word << n << " map tiles";
+			else if (type == "application/x-vnd.retifs.place")
+				word << n << " places";
+			else if (type == "application/x-vnd.retifs.address")
+				word << n << " addresses";
+			else if (type.StartsWith("image/"))
+				word << n << " photos";
+			else if (type.StartsWith("audio/"))
+				word << n << " recordings";
+			else if (type.StartsWith("video/"))
+				word << n << " videos";
+			else if (type == "application/x-person" || type == "contact")
+				word << n << " contacts";
+			else if (type == "text/calendar" || type == "event")
+				word << n << " events";
+			else if (type == "application/x-vnd.haiku-package")
+				word << n << " packages";
+			else {
+				rest += n;
+				continue;
+			}
+			if (!out.IsEmpty())
+				out << " · ";
+			out << word;
+		}
+		if (rest > 0) {
+			if (!out.IsEmpty())
+				out << " · ";
+			out << rest << (out.IsEmpty() ? " records" : " other");
+		}
+		return out;
+	}
+
+	static BString _Ago(double ms)
+	{
+		double s = (real_time_clock_usecs() / 1000.0 - ms) / 1000.0;
+		BString out;
+		if (s < 60)
+			out = "just now";
+		else if (s < 3600)
+			out << (int32)(s / 60) << " min ago";
+		else
+			out << (int32)(s / 3600) << " h ago";
+		return out;
+	}
+
+	void _FillAnnounces(const BMessage& heard)
+	{
+		// Only when something changed: the list is read every 5 s.
+		BString key;
+		int32 count = heard.HasString("error") ? 0 : Count(heard);
+		for (int32 i = 0; i < count; i++) {
+			BMessage l = Item(heard, i);
+			key << l.GetString("address", "") << l.GetString("here", "-")
+				<< (int32)l.GetDouble("seq", 0) << (int32)l.GetDouble("hops", 0)
+				<< ";";
+		}
+		if (key == fAnnounceKey && fAnnounceList->CountChildren() > 0)
+			return;
+		fAnnounceKey = key;
+		while (fAnnounceList->CountChildren() > 0) {
+			BView* v = fAnnounceList->ChildAt(0);
+			fAnnounceList->RemoveChild(v);
+			delete v;
+		}
+		while (fAnnounceList->GroupLayout()->CountItems() > 0)
+			delete fAnnounceList->GroupLayout()->RemoveItem((int32)0);
+		if (count == 0) {
+			fAnnounceList->AddChild(new BStringView(NULL, "Nothing heard yet: "
+				"public libraries announced on the network show up here."));
+		}
+		for (int32 i = 0; i < count; i++) {
+			BMessage l = Item(heard, i);
+			BString name = l.GetString("name", "");
+			if (name.IsEmpty())
+				name = "A public library";
+			BStringView* title = new BStringView(NULL, name.String());
+			title->SetFont(be_bold_font);
+			BMessage has;
+			l.FindMessage("has", &has);
+			BString detail;
+			if (l.GetBool("readable", true)) {
+				BString node = l.GetString("node", "");
+				node.Truncate(8);
+				detail << _Holds(has) << " · from <" << node << "…>, "
+					<< (int32)l.GetDouble("hops", 0) << " hop(s), "
+					<< _Ago(l.GetDouble("heard_ms", 0));
+			} else {
+				detail << "Needs a newer retifs (announce v"
+					<< (int32)l.GetDouble("v", 0) << ", format "
+					<< (int32)l.GetDouble("fmt", 0) << ")";
+			}
+			BStringView* about = new BStringView(NULL, l.GetString("about", ""));
+			BStringView* more = new BStringView(NULL, detail.String());
+			more->SetHighUIColor(B_PANEL_TEXT_COLOR, B_LIGHTEN_1_TINT);
+			BView* action;
+			if (l.HasString("here")) {
+				BStringView* joined = new BStringView(NULL, "Joined");
+				BString here("Here as ");
+				here << l.GetString("here", "");
+				joined->SetToolTip(here.String());
+				joined->SetHighUIColor(B_PANEL_TEXT_COLOR, B_LIGHTEN_1_TINT);
+				action = joined;
+			} else if (l.GetBool("readable", true)) {
+				BMessage* join = new BMessage(kJoin);
+				join->AddString("address", l.GetString("address", ""));
+				BButton* button = new BButton("Join", join);
+				join->AddPointer("source", button);
+				action = button;
+			} else
+				action = new BStringView(NULL, "");
+			BGroupView* row = new BGroupView(B_HORIZONTAL);
+			BLayoutBuilder::Group<>(row)
+				.AddGroup(B_VERTICAL, 2)
+					.Add(title)
+					.Add(about)
+					.Add(more)
+				.End()
+				.AddGlue()
+				.Add(action);
+			fAnnounceList->AddChild(row);
+			if (i + 1 < count)
+				fAnnounceList->AddChild(new BSeparatorView(B_HORIZONTAL));
+		}
+		fAnnounceList->GroupLayout()->AddItem(BSpaceLayoutItem::CreateGlue());
 	}
 
 	BView* _BuildNetwork()
@@ -529,16 +692,7 @@ private:
 				<< (l.GetBool("lazy", false) ? ", fetched as needed" : "");
 			return s;
 		});
-		_Fill(fHeard, fHeardAddresses, heard, "address", [](BMessage& l) {
-			BString s;
-			s << l.GetString("name", "?") << "  —  " << l.GetString("about", "")
-				<< "  (" << (int32)l.GetDouble("hops", 0) << " hop(s) away)";
-			// Joined already (or our own): under which name.
-			const char* here = l.GetString("here", NULL);
-			if (here != NULL)
-				s << "  · here as " << here;
-			return s;
-		});
+		_FillAnnounces(heard);
 
 		// Network.
 		if (reticulum.GetBool("running", false)) {
@@ -596,8 +750,8 @@ private:
 	BStringView* fUsage2;
 	BListView* fLibraries;
 	BStringList fLibraryNames;
-	BListView* fHeard;
-	BStringList fHeardAddresses;
+	BGroupView* fAnnounceList;
+	BString fAnnounceKey;
 	BStringView* fReticulum;
 	BListView* fConnections;
 	BStringList fConnectionNames;
