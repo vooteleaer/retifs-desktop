@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>org.retifs.Desktop</id>
+  <name>retifs</name>
+  <summary>This device, its libraries and how they're kept</summary>
+  <metadata_license>MIT</metadata_license>
+  <project_license>MIT</project_license>
+  <description>
+    <p>The retifs node at a glance, in the tray and in a window: Reticulum, the
+    daemon, settings, storage, libraries and their members, and Find. retifs
+    itself comes from the retifs .deb, and Reticulum (Prns, or another shared
+    instance) is installed apart. A prototype.</p>
+  </description>
+  <launchable type="desktop-id">org.retifs.Desktop.desktop</launchable>
+  <url type="homepage">https://github.com/vooteleaer/retifs</url>
+  <content_rating type="oars-1.1"/>
+</component>

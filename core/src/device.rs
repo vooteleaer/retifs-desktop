@@ -1,7 +1,8 @@
 //! This device: Reticulum (the shared instance retifs runs on), the
 //! services, and the node's settings. Reticulum is asked through `prnsd`'s
 //! own command line (`status --json`, `interfaces …`); the services are
-//! systemd user units on Linux (the .deb's) and, on Windows, processes the
+//! systemd user units on Linux (the .deb's; from the Flatpak, the host's
+//! through `flatpak-spawn --host`) and, on Windows, processes the
 //! utility itself starts at login (the installer's); the settings are the
 //! daemon's `retifs.toml`, edited in place so its comments stay.
 
@@ -43,6 +44,12 @@ pub struct Reticulum {
 /// brings one). Haiku: the Prns package's; Windows: the managed one; else
 /// the PATH's, or cargo's.
 pub fn prnsd() -> Option<PathBuf> {
+    // The Flatpak: the host's, found there (its PATH, or cargo's).
+    if in_flatpak() {
+        let o = host("sh").args(["-c", r#"command -v prnsd || { [ -x "$HOME/.cargo/bin/prnsd" ] && echo "$HOME/.cargo/bin/prnsd"; }"#]).output().ok()?;
+        let p = String::from_utf8_lossy(&o.stdout).trim().to_string();
+        return (o.status.success() && !p.is_empty()).then(|| PathBuf::from(p));
+    }
     if cfg!(target_os = "haiku") && Path::new(HAIKU_PRNSD).is_file() {
         return Some(PathBuf::from(HAIKU_PRNSD));
     }
@@ -146,7 +153,7 @@ fn run_prnsd(args: &[&str]) -> Result<(), String> {
 /// (prnsd is a console program; the utility asks it every few seconds).
 fn prnsd_command(bin: &Path) -> Command {
     #[allow(unused_mut)]
-    let mut cmd = Command::new(bin);
+    let mut cmd = host(bin);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -216,7 +223,10 @@ pub const RETIFSD: &str = SERVICES[0].0;
 /// there's no systemd.
 #[cfg(not(any(windows, target_os = "haiku")))]
 pub fn service_state(unit: &str) -> Option<String> {
-    let o = Command::new("systemctl").args(["--user", "is-active", unit]).output().ok()?;
+    if in_flatpak() && !host_has_unit(unit) {
+        return Some(NOT_INSTALLED.into());
+    }
+    let o = host("systemctl").args(["--user", "is-active", unit]).output().ok()?;
     let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
     (!s.is_empty()).then_some(s)
 }
@@ -224,8 +234,47 @@ pub fn service_state(unit: &str) -> Option<String> {
 /// `start`, `stop` or `restart` a user service.
 #[cfg(not(any(windows, target_os = "haiku")))]
 pub fn service(unit: &str, action: &str) -> Result<(), String> {
-    let o = Command::new("systemctl").args(["--user", action, unit]).output().map_err(|e| e.to_string())?;
+    if in_flatpak() && !host_has_unit(unit) {
+        return Err(NOT_INSTALLED.into());
+    }
+    let o = host("systemctl").args(["--user", action, unit]).output().map_err(|e| e.to_string())?;
     if o.status.success() { Ok(()) } else { Err(first_line(&o.stderr, "systemctl failed")) }
+}
+
+/// Running as a Flatpak (FLATPAK_ID set): retifs itself is the host's (the
+/// retifs .deb: the FUSE mount can't work in a sandbox), its services and
+/// prnsd reached through `flatpak-spawn --host`.
+pub fn in_flatpak() -> bool {
+    cfg!(target_os = "linux") && std::env::var_os("FLATPAK_ID").is_some()
+}
+
+/// What the Flatpak says where the host has no retifs.
+pub const NOT_INSTALLED: &str = "retifs isn't installed on this computer: install the retifs .deb";
+
+/// A program of this machine's: in the Flatpak, run on the host.
+fn host(program: impl AsRef<std::ffi::OsStr>) -> Command {
+    if in_flatpak() {
+        let mut cmd = Command::new("flatpak-spawn");
+        cmd.arg("--host").arg(program);
+        cmd
+    } else {
+        Command::new(program)
+    }
+}
+
+/// Whether the host has a user unit (the retifs .deb installs them).
+#[cfg(not(any(windows, target_os = "haiku")))]
+fn host_has_unit(unit: &str) -> bool {
+    host("systemctl").args(["--user", "cat", unit]).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().is_ok_and(|s| s.success())
+}
+
+/// Whether retifs is missing on the host (the Flatpak); false elsewhere.
+pub fn retifs_missing() -> bool {
+    #[cfg(not(any(windows, target_os = "haiku")))]
+    if in_flatpak() {
+        return !host_has_unit(RETIFSD);
+    }
+    false
 }
 
 /// A launch_daemon job's state: "active" while it runs, "inactive" when it

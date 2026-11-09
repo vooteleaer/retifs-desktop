@@ -31,6 +31,13 @@ fn main() -> glib::ExitCode {
     // opened in the running instance, if there is one.
     let link = std::env::args().find(|a| a.starts_with("retifs:"));
     let app = adw::Application::builder().application_id(APP_ID).flags(gio::ApplicationFlags::HANDLES_OPEN).build();
+    // The Flatpak asks to start at login, into the tray (the .deb has an
+    // autostart entry instead).
+    app.connect_startup(|app| {
+        if retifs_desktop_core::device::in_flatpak() {
+            ask_autostart(app);
+        }
+    });
     let first = std::cell::Cell::new(true);
     app.connect_activate(move |app| {
         // One window: started again, it comes to the front.
@@ -58,6 +65,34 @@ fn main() -> glib::ExitCode {
     let mut args = vec![std::env::args().next().unwrap_or_default()];
     args.extend(link);
     app.run_with_args(&args)
+}
+
+/// Asks the Background portal to start the app at login, `--hidden` (the
+/// desktop may ask the user once). Without a portal: nothing.
+fn ask_autostart(app: &adw::Application) {
+    let Some(bus) = app.dbus_connection() else { return };
+    let options = glib::VariantDict::new(None);
+    options.insert_value("reason", &"Shows retifs in the tray".to_variant());
+    options.insert_value("autostart", &true.to_variant());
+    options.insert_value("commandline", &vec!["retifs-desktop", "--hidden"].to_variant());
+    options.insert_value("dbus-activatable", &false.to_variant());
+    let args = glib::Variant::tuple_from_iter(["".to_variant(), options.end()]);
+    bus.call(
+        Some("org.freedesktop.portal.Desktop"),
+        "/org/freedesktop/portal/desktop",
+        "org.freedesktop.portal.Background",
+        "RequestBackground",
+        Some(&args),
+        None,
+        gio::DBusCallFlags::NONE,
+        -1,
+        None::<&gio::Cancellable>,
+        |r| {
+            if let Err(e) = r {
+                eprintln!("no autostart (Background portal): {e}");
+            }
+        },
+    );
 }
 
 /// Runs `work` on a worker thread (daemon calls block), then `then` with its
@@ -284,9 +319,15 @@ fn build(app: &adw::Application, hidden: bool) {
         let (me, banner, was_up, ticks) = (me.clone(), banner.clone(), Rc::new(RefCell::new(false)), Rc::new(RefCell::new(0u32)));
         move || {
             let (me2, banner, was_up, ticks) = (me.clone(), banner.clone(), was_up.clone(), ticks.clone());
-            bg(&me.daemon, |d| d.status(), move |s: Status| {
+            // The Flatpak: retifs is the host's; without it, the banner says so.
+            bg(&me.daemon, |d| {
+                let s = d.status();
+                let missing = !s.up && retifs_desktop_core::device::retifs_missing();
+                (s, missing)
+            }, move |(s, missing): (Status, bool)| {
                 me2.retifs_up.set(s.up);
                 *me2.node.borrow_mut() = s.node.clone();
+                banner.set_title(if missing { retifs_desktop_core::device::NOT_INSTALLED } else { "retifsd is not running" });
                 banner.set_revealed(!s.up);
                 me2.title.set_subtitle(&match &s.node {
                     Some(n) => format!("node {}…", &n[..8.min(n.len())]),

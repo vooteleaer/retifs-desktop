@@ -1,0 +1,68 @@
+# org.retifs.Desktop: the utility only. retifs itself (retifsd, the CLI,
+# the FUSE mount) is the host's, from the retifs .deb; the utility reaches
+# its user services and prnsd through `flatpak-spawn --host`. Build it with
+# build.sh next to this: it stages the sources this names (src/…) beside a
+# copy of this file.
+id: org.retifs.Desktop
+runtime: org.gnome.Platform
+runtime-version: '50'
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: retifs-desktop
+finish-args:
+  # retifsd's socket is in the shared store; Reticulum's shared instance
+  # (TCP 127.0.0.1:37428 or the abstract socket @rns/default) needs the
+  # host's network.
+  - --share=network
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  # The one store every retifs Flatpak and the host's retifsd share.
+  - --filesystem=xdg-data/retifs:create
+  # systemctl --user and prnsd on the host (flatpak-spawn --host).
+  - --talk-name=org.freedesktop.Flatpak
+  # The tray icon (StatusNotifierItem).
+  - --talk-name=org.kde.StatusNotifierWatcher
+  - --own-name=org.kde.StatusNotifierItem-2-1
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+  # cargo fetches the crates (local bundles; no vendoring).
+  build-args:
+    - --share=network
+  env:
+    CARGO_HOME: /run/build/retifs-desktop/cargo
+modules:
+  - name: retifs-desktop
+    buildsystem: simple
+    sources:
+      - type: dir
+        path: src/retifs
+        dest: retifs
+      # The workspace's Android crate names Calendar's and Contacts' cores.
+      - type: dir
+        path: src/retifs-calendar
+        dest: retifs-calendar
+      - type: dir
+        path: src/retifs-contacts
+        dest: retifs-contacts
+      - type: dir
+        path: src/retifs-desktop
+        dest: retifs-desktop
+      # The store set (inside a Flatpak XDG_DATA_HOME is the app's own),
+      # then the program.
+      - type: script
+        dest-filename: wrapper
+        commands:
+          - ': "${RETIFS_STORE:=$HOME/.local/share/retifs}"'
+          - export RETIFS_STORE
+          - exec /app/libexec/retifs-desktop "$@"
+    build-commands:
+      - cargo build --release --locked --manifest-path retifs-desktop/Cargo.toml -p retifs-desktop-gtk
+      - install -Dm755 retifs-desktop/target/release/retifs-desktop /app/libexec/retifs-desktop
+      - install -Dm755 wrapper /app/bin/retifs-desktop
+      - install -Dm644 retifs-desktop/packaging/org.retifs.Desktop.desktop -t /app/share/applications
+      - install -Dm644 retifs-desktop/packaging/org.retifs.Desktop.svg -t /app/share/icons/hicolor/scalable/apps
+      - install -Dm644 retifs-desktop/packaging/flatpak/org.retifs.Desktop.metainfo.xml -t /app/share/metainfo
+      - install -Dm644 retifs-desktop/LICENSE -t /app/share/licenses/org.retifs.Desktop
