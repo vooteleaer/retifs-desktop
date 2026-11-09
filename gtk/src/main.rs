@@ -19,10 +19,18 @@ use retifs_desktop_core::{human, Daemon, NsView, SavedQuery, Status};
 
 const APP_ID: &str = "org.retifs.Desktop";
 
+thread_local! {
+    /// The window's state, once built: a link opened later finds it here.
+    static APP: RefCell<Option<Rc<App>>> = const { RefCell::new(None) };
+}
+
 fn main() -> glib::ExitCode {
     // --hidden: started at login, into the tray only.
     let hidden = std::env::args().any(|a| a == "--hidden");
-    let app = adw::Application::builder().application_id(APP_ID).build();
+    // A retifs: link (the desktop entry handles x-scheme-handler/retifs):
+    // opened in the running instance, if there is one.
+    let link = std::env::args().find(|a| a.starts_with("retifs:"));
+    let app = adw::Application::builder().application_id(APP_ID).flags(gio::ApplicationFlags::HANDLES_OPEN).build();
     let first = std::cell::Cell::new(true);
     app.connect_activate(move |app| {
         // One window: started again, it comes to the front.
@@ -33,7 +41,23 @@ fn main() -> glib::ExitCode {
         }
         first.set(false);
     });
-    app.run_with_args(&[std::env::args().next().unwrap_or_default()])
+    // The join dialog with the link in it: nothing is joined until the user says so.
+    app.connect_open(|app, files, _| {
+        if app.windows().is_empty() {
+            build(app, false);
+        }
+        let Some(me) = APP.with(|a| a.borrow().clone()) else { return };
+        me.window.present();
+        for f in files {
+            let uri = f.uri().to_string();
+            if uri.starts_with("retifs:") {
+                ask_add_namespace(&me, Some(me.window.clone().upcast()), true, &uri);
+            }
+        }
+    });
+    let mut args = vec![std::env::args().next().unwrap_or_default()];
+    args.extend(link);
+    app.run_with_args(&args)
 }
 
 /// Runs `work` on a worker thread (daemon calls block), then `then` with its
@@ -185,6 +209,7 @@ fn build(app: &adw::Application, hidden: bool) {
         announces: RefCell::new(None),
         announce_rows: RefCell::new(Vec::new()),
     });
+    APP.with(|a| *a.borrow_mut() = Some(me.clone()));
     let announces = library::announces_page(&me);
     me.stack.add_named(&announces, Some("announces"));
     library::add_actions(&me, &window);
@@ -236,12 +261,12 @@ fn build(app: &adw::Application, hidden: bool) {
         let (me2, pop) = (me.clone(), add_popover.clone());
         new_library.connect_clicked(move |b| {
             pop.popdown();
-            ask_add_namespace(&me2, b.root().and_downcast(), false);
+            ask_add_namespace(&me2, b.root().and_downcast(), false, "");
         });
         let pop = add_popover.clone();
         join_library.connect_clicked(move |b| {
             pop.popdown();
-            ask_add_namespace(&me, b.root().and_downcast(), true);
+            ask_add_namespace(&me, b.root().and_downcast(), true, "");
         });
     }
     {
@@ -483,8 +508,9 @@ fn show_saved(me: &Rc<App>, saved: Vec<(SavedQuery, Vec<String>, usize)>) {
 }
 
 /// A new library (a namespace of the user's: just a name), or `join`: a
-/// library from an invitation or link (as `retifs open`).
-fn ask_add_namespace(me: &Rc<App>, window: Option<gtk::Window>, join: bool) {
+/// library from an invitation or link (as `retifs open`); `given`: a link
+/// opened from elsewhere, already in the field.
+fn ask_add_namespace(me: &Rc<App>, window: Option<gtk::Window>, join: bool, given: &str) {
     let name = gtk::Entry::builder().placeholder_text("Name").activates_default(true).build();
     let link = gtk::Entry::builder().placeholder_text("Invitation or link").activates_default(true).visible(join).build();
     {
@@ -494,6 +520,7 @@ fn ask_add_namespace(me: &Rc<App>, window: Option<gtk::Window>, join: bool) {
             name.set_placeholder_text(Some(&Daemon::link_name(&l.text()).unwrap_or_else(|_| "Name".into())));
         });
     }
+    link.set_text(given);
     let fields = gtk::Box::new(gtk::Orientation::Vertical, 8);
     fields.append(&link);
     fields.append(&name);

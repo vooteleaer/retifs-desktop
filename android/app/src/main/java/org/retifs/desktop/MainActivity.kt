@@ -77,11 +77,23 @@ class MainActivity : ComponentActivity() {
         if (missing.isNotEmpty()) requestPermissions(missing.toTypedArray(), 1)
         sync()
         RetifsService.start(this)
+        opened(intent)
         setContent {
             MaterialTheme(colorScheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()) {
                 App()
             }
         }
+    }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        opened(intent)
+    }
+
+    /** A retifs: link opened elsewhere: the join dialog shows it (nothing is joined until the user says so). */
+    private fun opened(intent: android.content.Intent?) {
+        val link = intent?.dataString ?: return
+        if (link.startsWith("retifs:")) LinkOpened.link = link
     }
 
     private fun allowed(p: String) = checkSelfPermission(p) == android.content.pm.PackageManager.PERMISSION_GRANTED
@@ -121,6 +133,8 @@ fun App() {
     var reticulum by remember { mutableStateOf(false) }
     var tick by remember { mutableIntStateOf(0) }
     var note by remember { mutableStateOf("") }
+    // A retifs: link opened elsewhere, wherever the app is.
+    LinkOpened.link?.let { given -> JoinLinkDialog({ note = it }, given) { LinkOpened.link = null } }
     LaunchedEffect(tick) {
         while (true) {
             status = JSONObject(core { Core.status() })

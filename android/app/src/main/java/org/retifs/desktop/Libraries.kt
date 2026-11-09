@@ -371,17 +371,23 @@ fun PurposeDialog(ns: String, current: List<String>, said: (String) -> Unit, clo
 /** What a library may be for (ADR-0032), as the core has them. */
 val PURPOSES = listOf("contacts" to "Contacts", "calendar" to "Calendar", "photos" to "Photos", "files" to "Files")
 
+/** A retifs: link opened from elsewhere (a browser, a message), until the join dialog is closed. */
+object LinkOpened {
+    var link by mutableStateOf<String?>(null)
+}
+
+/** Joining by invitation or link; `given`: a link opened elsewhere, already in the field. */
 @Composable
-fun JoinLinkDialog(said: (String) -> Unit, close: () -> Unit) {
+fun JoinLinkDialog(said: (String) -> Unit, given: String = "", close: () -> Unit) {
     val scope = rememberCoroutineScope()
-    var link by remember { mutableStateOf("") }
+    var link by remember(given) { mutableStateOf(given) }
     var name by remember { mutableStateOf("") }
     AlertDialog(
         onDismissRequest = close,
         title = { Text("Join a library") },
         text = {
             Column {
-                Text("Paste the invitation or link a member gave you.", style = MaterialTheme.typography.bodySmall)
+                Text(if (given.isEmpty()) "Paste the invitation or link a member gave you." else "A link was opened: join the library it names?", style = MaterialTheme.typography.bodySmall)
                 OutlinedTextField(value = link, onValueChange = { link = it }, label = { Text("Link") }, singleLine = true)
                 OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Name here (optional)") }, singleLine = true)
             }

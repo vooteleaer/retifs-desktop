@@ -15,3 +15,9 @@ resource app_version {
 	short_info = "retifs",
 	long_info = "retifs: status and settings of this device's retifs and Reticulum"
 };
+
+/* retifs: links (invitations, libraries) open here: the link in the
+ * Announces tab, joined only when the user says so. */
+resource file_types message {
+	"types" = "application/x-vnd.Be.URL.retifs"
+};

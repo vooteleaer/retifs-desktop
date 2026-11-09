@@ -88,6 +88,7 @@ enum {
 	kCreate = 'crea',		// make it ("name", "announce")
 	kJoin = 'join',
 	kOpenLink = 'olnk',
+	kLinkGiven = 'lgvn',	// window: a retifs: link opened elsewhere ("link")
 	kEnable = 'enab',
 	kDisable = 'disa',
 	kRemove = 'remv',
@@ -994,6 +995,15 @@ public:
 				_Act("join", message->GetString("address", ""));
 				break;
 			}
+			case kLinkGiven:
+			{
+				// In the Announces tab's field: joined only with Add library.
+				fTabs->Select(1);
+				fLink->SetText(message->GetString("link", ""));
+				fLink->MakeFocus(true);
+				Activate();
+				break;
+			}
 			case kOpenLink:
 			{
 				BString link(fLink->Text());
@@ -1871,21 +1881,50 @@ public:
 		for (int32 i = 1; i < argc; i++) {
 			if (strcmp(argv[i], "--deskbar") == 0)
 				fDeskbarOnly = true;
+			// A retifs: link (the app supports application/x-vnd.Be.URL.retifs):
+			// to the window, now or once it's there.
+			else if (strncmp(argv[i], "retifs:", 7) == 0) {
+				fLinkGiven = argv[i];
+				if (fReady)
+					_GiveLink();
+			}
 		}
 	}
 
 	void ReadyToRun()
 	{
 		InstallInDeskbar();
-		if (fDeskbarOnly) {
+		if (fDeskbarOnly && fLinkGiven.IsEmpty()) {
 			Quit();
 			return;
 		}
-		(new RetifsWindow())->Show();
+		RetifsWindow* window = new RetifsWindow();
+		fWindow = BMessenger(window);
+		window->Show();
+		fReady = true;
+		if (!fLinkGiven.IsEmpty())
+			_GiveLink();
 	}
 
 private:
+	void _GiveLink()
+	{
+		// The window may have been closed since: a new one, then.
+		if (!fWindow.IsValid()) {
+			RetifsWindow* window = new RetifsWindow();
+			fWindow = BMessenger(window);
+			window->Show();
+		}
+		BMessage given(kLinkGiven);
+		given.AddString("link", fLinkGiven);
+		fWindow.SendMessage(&given);
+		fLinkGiven = "";
+	}
+
 	bool fDeskbarOnly;
+	bool fReady = false;
+	BMessenger fWindow;
+	BString fLinkGiven;
 };
 
 
