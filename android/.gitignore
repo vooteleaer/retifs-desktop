@@ -2,3 +2,4 @@ build/
 .gradle/
 local.properties
 app/src/main/jniLibs/
+app/src/main/assets/default-libraries

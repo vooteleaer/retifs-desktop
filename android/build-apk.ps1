@@ -49,6 +49,10 @@ foreach ($abi in $Abis) {
     & "$Bin\llvm-strip.exe" "$out\libretifsd.so" "$out\libretifs_desktop.so"
 }
 
+# The libraries a new install joins (retifs' packaging/default-libraries).
+New-Item -ItemType Directory -Force "$Here\app\src\main\assets" | Out-Null
+Copy-Item "$Retifs\packaging\default-libraries" "$Here\app\src\main\assets\default-libraries"
+
 Write-Host "== APK"
 Push-Location $Here
 try {

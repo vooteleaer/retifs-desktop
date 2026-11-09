@@ -79,6 +79,16 @@ class RetifsService : Service() {
             .start()
     }
 
+    /**
+     * The libraries a new install joins (retifs' packaging/default-libraries,
+     * an asset of the app), as a file retifsd reads: it joins each once.
+     */
+    private fun defaultLibraries(): File {
+        val f = File(filesDir, "default-libraries")
+        runCatching { assets.open("default-libraries").use { input -> f.outputStream().use { input.copyTo(it) } } }
+        return f
+    }
+
     private fun prnsApp(): Boolean = try {
         packageManager.getPackageInfo(PRNS_APP, 0)
         true
@@ -111,7 +121,7 @@ class RetifsService : Service() {
                 }
                 downs = if (up) 0 else downs + 1
                 if (retifsd?.isAlive != true && up) {
-                    retifsd = start(p.retifsd, "retifsd")
+                    retifsd = start(p.retifsd, "retifsd", "--default-libraries", defaultLibraries().absolutePath)
                     if (firstStart) phoneDefaults()
                     firstStart = false
                 }

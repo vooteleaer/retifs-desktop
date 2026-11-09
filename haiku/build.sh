@@ -37,6 +37,9 @@ for p in "$ROOT/../retifs/target/release/retifsd" "$ROOT/../retifs/target/releas
 		cp "$p" "$OUT/bin/"
 	fi
 done
+# The libraries a new install joins (retifsd reads it next to itself).
+mkdir -p "$OUT/bin"
+cp "$ROOT/../retifs/packaging/default-libraries" "$OUT/bin/default-libraries"
 # Libraries as volumes: the userlandfs module (retifs-haikufs), when built.
 M="$ROOT/../retifs/target/release/libretifs_haikufs.so"
 if [ -f "$M" ]; then
