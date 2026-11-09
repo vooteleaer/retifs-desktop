@@ -26,6 +26,8 @@ char* rd_join(const char* address);
 /* Joins the library a retifs: link or invitation names: "" or the error. */
 char* rd_open_link(const char* link);
 char* rd_leave(const char* ns);
+/* Deletes a library on every member's device (only one who may invite). */
+char* rd_delete(const char* ns);
 char* rd_members(const char* ns);            /* [{"writer","name","words","role","limits","you","creator"}] */
 char* rd_invite(const char* ns, const char* role, int days);   /* link, or "error: …"; role read|write|invite */
 char* rd_invites(const char* ns);            /* [{"id","role","expires","spent"}] */

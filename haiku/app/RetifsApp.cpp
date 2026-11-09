@@ -64,6 +64,8 @@ enum {
 	kStop = 'stop',
 	kLeave = 'leav',		// window: leave a library? ("ns")
 	kLeaveYes = 'lvys',		// the alert's answer
+	kDelete = 'dele',		// window: delete a library everywhere? ("ns")
+	kDeleteYes = 'dlys',	// the alert's answer
 	kKeep = 'keep',			// "ns", "all"
 	kCopyLink = 'clnk',		// "ns"
 	kLinked = 'lnkd',		// window: the link ("link")
@@ -326,6 +328,8 @@ public:
 					error = Result(rd_open_link(a.String()));
 				else if (op == "leave")
 					error = Result(rd_leave(a.String()));
+				else if (op == "delete")
+					error = Result(rd_delete(a.String()));
 				else if (op == "keep")
 					error = Result(rd_keep(a.String(), message->GetBool("on", false)));
 				else if (op == "announce")
@@ -889,6 +893,25 @@ public:
 				if (message->GetInt32("which", 0) == 1)
 					_Act("leave", fAsked);
 				break;
+			case kDelete:
+			{
+				fAsked = message->GetString("ns", "");
+				BString text;
+				text << "Delete " << fAsked << " everywhere?\n\nEvery record "
+					"goes, on every member's device: each lets the library go "
+					"as it hears of it, and one that was away does when it's "
+					"back (within 30 days). What someone already copied out "
+					"of it stays theirs. This can't be undone.";
+				BAlert* alert = new BAlert("Delete", text.String(), "Cancel",
+					"Delete everywhere", NULL, B_WIDTH_AS_USUAL, B_STOP_ALERT);
+				alert->SetShortcut(0, B_ESCAPE);
+				alert->Go(new BInvoker(new BMessage(kDeleteYes), this));
+				break;
+			}
+			case kDeleteYes:
+				if (message->GetInt32("which", 0) == 1)
+					_Act("delete", fAsked);
+				break;
 			case kKeep:
 				_Act("keep", message->GetString("ns", ""),
 					message->GetBool("all", false));
@@ -1375,8 +1398,10 @@ public:
 				kAnnounce, "on", !announced, false, true);
 		}
 		menu->AddSeparatorItem();
-		// One's own: made here, others may hold it only through this device.
-		add("Leave library…", kLeave, NULL, false, false, !me && !own);
+		add("Leave library…", kLeave, NULL, false, false, !me);
+		// Everywhere: only one who may invite (holds grant).
+		if (invites && !me)
+			add("Delete everywhere…", kDelete, NULL, false, false, true);
 		menu->SetTargetForItems(this);
 		view->ConvertToScreen(&where);
 		menu->SetAsyncAutoDestruct(true);

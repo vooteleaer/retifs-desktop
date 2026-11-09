@@ -87,6 +87,15 @@ pub unsafe extern "C" fn rd_leave(ns: *const c_char) -> *mut c_char {
     result(api::leave(&unsafe { arg(ns) }))
 }
 
+/// Deletes library `ns` on every member's device (retifs ADR-0034).
+///
+/// # Safety
+/// `ns` is a NUL-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rd_delete(ns: *const c_char) -> *mut c_char {
+    result(api::delete_library(&unsafe { arg(ns) }))
+}
+
 /// A library's members: `[{"writer", "name", "words", "role", "limits",
 /// "you", "creator"}]` or `{"error"}`.
 /// # Safety

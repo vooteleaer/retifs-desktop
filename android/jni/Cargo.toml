@@ -13,3 +13,9 @@ crate-type = ["cdylib"]
 [dependencies]
 retifs-desktop-core = { path = "../../core" }
 jni = { version = "0.21", default-features = false }
+# The DocumentsProvider's listings
+serde_json = "1"
+# The contacts sync adapter (Android's own Contacts): retifs-contacts' records.
+retifs-contacts-core = { path = "../../../retifs-contacts/core" }
+# The calendar sync adapter (Android's own Calendar): retifs-calendar's events.
+retifs-calendar-core = { path = "../../../retifs-calendar/core" }

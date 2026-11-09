@@ -8,6 +8,8 @@ publish.workspace = true
 
 [dependencies]
 libretifs = { path = "../../retifs/crates/libretifs" }
+# Libraries as files (Android's DocumentsProvider): the FUSE mount's tree.
+retifs-tree = { path = "../../retifs/crates/retifs-tree" }
 # Fingerprint words, to tell members apart (ADR-0020).
 retifs-core = { path = "../../retifs/crates/retifs-core" }
 tokio = { version = "1", features = ["rt"] }

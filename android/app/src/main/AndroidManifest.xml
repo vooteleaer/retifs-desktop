@@ -3,11 +3,23 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <!-- Reticulum's AutoInterface finds others on the Wi-Fi by multicast. -->
-    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- retifs contacts in the system's Contacts (a sync adapter, both ways). -->
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
+    <uses-permission android:name="android.permission.WRITE_CONTACTS" />
+    <!-- retifs calendars in the system's Calendar (a sync adapter, both ways). -->
+    <uses-permission android:name="android.permission.READ_CALENDAR" />
+    <uses-permission android:name="android.permission.WRITE_CALENDAR" />
+    <uses-permission android:name="android.permission.READ_SYNC_SETTINGS" />
+    <uses-permission android:name="android.permission.WRITE_SYNC_SETTINGS" />
+
+    <!-- Prns's Android app: where it's installed, it is the phone's Reticulum. -->
+    <queries>
+        <package android:name="org.personal.hopspot" />
+    </queries>
 
     <application
         android:allowBackup="false"
@@ -25,14 +37,73 @@
             </intent-filter>
         </activity>
 
-        <!-- The daemons: retifsd, and Reticulum (prnsd) where no other app runs one. -->
+        <!-- retifsd, on the phone's Reticulum (Prns's app). -->
         <service
             android:name=".RetifsService"
             android:exported="false"
             android:foregroundServiceType="specialUse">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Runs the retifs and Reticulum daemons: this device's encrypted data, synced with the user's other devices over a mesh network." />
+                android:value="Runs the retifs daemon: this device's encrypted data, synced with the user's other devices over a mesh network." />
         </service>
+
+        <!-- Other apps (retifs-photos, retifs-map) using retifs: the user lets
+             each in, to the libraries chosen; connections are handed over. -->
+        <service android:name=".AccessService" android:exported="true">
+            <intent-filter><action android:name="org.retifs.action.ACCESS" /></intent-filter>
+        </service>
+        <activity
+            android:name=".AccessActivity"
+            android:exported="true"
+            android:theme="@android:style/Theme.Material.Dialog.NoActionBar"
+            android:excludeFromRecents="true">
+            <intent-filter>
+                <action android:name="org.retifs.action.LET_IN" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <!-- The libraries in the Files app and every app's file picker. -->
+        <provider
+            android:name=".LibrariesProvider"
+            android:authorities="org.retifs.desktop.documents"
+            android:exported="true"
+            android:grantUriPermissions="true"
+            android:permission="android.permission.MANAGE_DOCUMENTS">
+            <intent-filter>
+                <action android:name="android.content.action.DOCUMENTS_PROVIDER" />
+            </intent-filter>
+        </provider>
+
+        <!-- The "retifs" account (no contacts of its own), and an address book
+             account per library holding contacts. The system's Contacts takes
+             one schema per app, so every address book has the editable one;
+             a library read-only here has its contacts marked read-only. -->
+        <service android:name=".AccountService" android:exported="true">
+            <intent-filter><action android:name="android.accounts.AccountAuthenticator" /></intent-filter>
+            <meta-data android:name="android.accounts.AccountAuthenticator" android:resource="@xml/authenticator" />
+        </service>
+        <service android:name=".AddressBookAccountService" android:exported="true">
+            <intent-filter><action android:name="android.accounts.AccountAuthenticator" /></intent-filter>
+            <meta-data android:name="android.accounts.AccountAuthenticator" android:resource="@xml/authenticator_ab" />
+        </service>
+        <service android:name=".CalendarSyncService" android:exported="true">
+            <intent-filter><action android:name="android.content.SyncAdapter" /></intent-filter>
+            <meta-data android:name="android.content.SyncAdapter" android:resource="@xml/calendar_syncadapter" />
+        </service>
+        <service android:name=".ContactsSyncService" android:exported="true">
+            <intent-filter><action android:name="android.content.SyncAdapter" /></intent-filter>
+            <meta-data android:name="android.content.SyncAdapter" android:resource="@xml/contacts_syncadapter_ab" />
+            <meta-data android:name="android.provider.CONTACTS_STRUCTURE" android:resource="@xml/contacts" />
+        </service>
+
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

@@ -65,11 +65,24 @@ pub fn add_actions(me: &Rc<App>, window: &adw::ApplicationWindow) {
         confirm(
             me,
             &format!("Leave {ns}?"),
-            "Its records go from this device. Others who have it keep theirs; you can join it again.",
+            if flag(me, &ns, "own") { retifs_desktop_core::LEAVE_OWN } else { retifs_desktop_core::LEAVE },
             "Leave",
             move || {
                 let ns = ns.clone();
                 bg(&me2.daemon, move |d| d.leave(&ns), done(&me2))
+            },
+        );
+    }));
+    act("delete", Box::new(|me, ns| {
+        let me2 = me.clone();
+        confirm(
+            me,
+            &format!("Delete {ns} everywhere?"),
+            retifs_desktop_core::DELETE,
+            "Delete everywhere",
+            move || {
+                let ns = ns.clone();
+                bg(&me2.daemon, move |d| d.delete_library(&ns), done(&me2))
             },
         );
     }));
@@ -148,11 +161,12 @@ pub fn menu(me: &Rc<App>, ns: &str) -> gio::Menu {
             share.append_item(&item(if flag(me, ns, "announced") { "Stop announcing" } else { "Announce on the network…" }, "announce"));
         }
         menu.append_section(None, &share);
-        if !own {
-            let leave = gio::Menu::new();
-            leave.append_item(&item("Leave library…", "leave"));
-            menu.append_section(None, &leave);
+        let leave = gio::Menu::new();
+        leave.append_item(&item("Leave library…", "leave"));
+        if may_invite(me, ns) {
+            leave.append_item(&item("Delete everywhere…", "delete"));
         }
+        menu.append_section(None, &leave);
     }
     menu
 }

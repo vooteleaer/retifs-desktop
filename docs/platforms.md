@@ -4,13 +4,13 @@ One retifs (the same Rust daemon, `retifsd`, and the same transport, Prns) and o
 
 | | Daemon | Reticulum | Utility | Files | Packaging |
 |---|---|---|---|---|---|
-| **Linux** | runs (amd64, arm64) | bundled prnsd, or the machine's | GTK 4 / libadwaita, tray (StatusNotifierItem) | FUSE mount | .deb (retifs amd64+arm64, utility amd64) |
-| **Windows** | runs | bundled prnsd, or the user's | Win32, notification area | Cloud Files | retifs-setup.exe (per user) |
-| **Android** | runs (emulator, x86_64; aarch64 builds) | bundled prnsd, TCP shared instance | Kotlin + Compose, foreground service | — (DocumentsProvider planned) | debug APK (`android/build-apk.ps1`) |
+| **Linux** | runs (amd64, arm64) | Prns (prnsd), or the machine's rnsd | GTK 4 / libadwaita, tray (StatusNotifierItem) | FUSE mount | .deb (retifs amd64+arm64, utility amd64) |
+| **Windows** | runs | Prns (prnsd-managed), or another shared instance | Win32, notification area | Cloud Files | retifs-setup.exe (per user) |
+| **Android** | runs (phone, arm64; emulator, x86_64) | Prns's app (`org.personal.hopspot`), or another app's shared instance (Columba, Sideband) | Kotlin + Compose, foreground service | — (DocumentsProvider planned) | debug APK (`android/build-apk.ps1`) |
 | **Haiku** | runs (x86_64, native build) | the Prns package (prnsd-haiku: prnsd, its app and Deskbar icon) | Haiku API (BeAPI) window, Deskbar replicant | userlandfs module (retifs-haikufs): attributes, queries | hpkg (`haiku/package.sh`), system package |
 
 ## Linux
-Done: the `retifs` .deb for amd64 and arm64 (glibc 2.36+: Debian 12, Ubuntu 22.04, Raspberry Pi OS bookworm), prnsd bundled and started only where no Reticulum runs; the utility's .deb for amd64 (GTK 4.12+, libadwaita 1.4+: Debian 13, Ubuntu 24.04), in the tray from login.
+Done: the `retifs` .deb for amd64 and arm64 (glibc 2.36+: Debian 12, Ubuntu 22.04, Raspberry Pi OS bookworm), retifsd started once Reticulum (Prns, installed apart) is up; the utility's .deb for amd64 (GTK 4.12+, libadwaita 1.4+: Debian 13, Ubuntu 24.04), in the tray from login.
 
 Next:
 - The utility for arm64 (a Raspberry Pi desktop): the same .deb, cross-built against arm64 GTK.
@@ -38,8 +38,8 @@ The plan it follows:
 
 Plan, one app, "retifs":
 - **Kotlin and Jetpack Compose** (Material 3), the platform's own toolkit.
-- **A foreground service** runs the daemons as executables shipped as native libraries (`libretifsd.so`, `libprnsd.so` in `jniLibs`, run from `nativeLibraryDir`: since Android 10 an app may not execute files it wrote, but may execute its native libraries). Its notification is Android's tray: the same states, Open and Stop.
-- **Reticulum:** the bundled prnsd where no shared instance answers on localhost TCP 37428; if another app (Sideband) runs one, retifs uses it. Prns's Android work (the `wip/android` branch) brings the radios (RNode over USB and Bluetooth) later.
+- **A foreground service** runs retifsd as an executable shipped as a native library (`libretifsd.so` in `jniLibs`, run from `nativeLibraryDir`: since Android 10 an app may not execute files it wrote, but may execute its native libraries), started at boot and after an update. Its notification is Android's tray: the same states, Open and Stop.
+- **Reticulum (2026-11-04):** never bundled. Prns's own app (`org.personal.hopspot`, the `wip/android` branch: Wi-Fi, Bluetooth LE, USB, RNode over BLE) is the phone's Reticulum; retifsd joins its shared instance on localhost TCP 37428 once it's up (only the port: no RPC key), and so does any other app's (Columba, Sideband). Connections are set up in Prns; the Network tab says whether Reticulum runs and opens Prns.
 - **The UI talks to the core through JNI:** `core/` built as a library for Android with a thin JNI layer returning JSON (status, Reticulum, settings, libraries, find). The same calls as the GTK and Win32 front ends, no second protocol implementation in Kotlin.
 - **A phone is a small node:** storage-less or a small store limit by default (ADR-0031), holding nothing for others unless the user says so; keep rules decide what stays offline.
 - **Files:** a `DocumentsProvider` (Storage Access Framework) shows libraries in the Files app and every app's file picker, Android's counterpart of FUSE and Cloud Files. After the utility.

@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- What a retifs contact has in the system's Contacts, edited there too:
+     the fields retifs-contacts keeps (ADR-0024). -->
+<ContactsAccountType xmlns:android="http://schemas.android.com/apk/res/android">
+    <EditSchema>
+        <!-- The system's Contacts takes a name kind only with every part
+             (it refuses the whole schema otherwise). Prefix, middle name and
+             suffix are kept in retifs; phonetic names aren't. -->
+        <DataKind kind="name" maxOccurs="1"
+            supportsDisplayName="true" supportsPrefix="true" supportsMiddleName="true" supportsSuffix="true"
+            supportsPhoneticFamilyName="true" supportsPhoneticMiddleName="true" supportsPhoneticGivenName="true" />
+        <!-- Required as well; a photo set here stays on the phone for now
+             (retifs' `photo` names a photo record, ADR-0024). -->
+        <DataKind kind="photo" maxOccurs="1" />
+        <DataKind kind="nickname" maxOccurs="1" />
+        <DataKind kind="phone">
+            <Type type="mobile" />
+            <Type type="home" />
+            <Type type="work" />
+            <Type type="other" />
+            <Type type="custom" />
+        </DataKind>
+        <DataKind kind="email">
+            <Type type="other" />
+            <Type type="home" />
+            <Type type="work" />
+            <Type type="mobile" />
+            <Type type="custom" />
+        </DataKind>
+        <DataKind kind="postal" needsStructured="false">
+            <Type type="other" />
+            <Type type="home" />
+            <Type type="work" />
+            <Type type="custom" />
+        </DataKind>
+        <DataKind kind="organization" maxOccurs="1" />
+        <DataKind kind="event" dateWithTime="false">
+            <Type type="birthday" maxOccurs="1" yearOptional="true" />
+        </DataKind>
+        <DataKind kind="website" />
+        <DataKind kind="note" maxOccurs="1" />
+    </EditSchema>
+</ContactsAccountType>

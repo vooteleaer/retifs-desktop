@@ -29,7 +29,7 @@ impl Interface {
 /// Reticulum on this machine.
 #[derive(Debug, Clone, Default)]
 pub struct Reticulum {
-    /// The prnsd found to ask (the bundled one first).
+    /// The prnsd found to ask (Prns's own).
     pub prnsd: Option<PathBuf>,
     /// A shared instance answered.
     pub running: bool,
@@ -39,33 +39,28 @@ pub struct Reticulum {
     pub error: Option<String>,
 }
 
-/// The prnsd to use: the one the retifs package bundles, one on the PATH
-/// (Haiku: the Prns package's), or (Windows) the managed one.
+/// The prnsd to ask: Prns's own, installed apart from retifs (retifs never
+/// brings one). Haiku: the Prns package's; Windows: the managed one; else
+/// the PATH's, or cargo's.
 pub fn prnsd() -> Option<PathBuf> {
-    // Where an app ships it itself (Android: among its native libraries).
-    if let Some(p) = std::env::var_os("RETIFS_PRNSD").map(PathBuf::from).filter(|p| p.is_file()) {
-        return Some(p);
-    }
-    let bundled = if cfg!(windows) {
-        install_dir().join("prnsd.exe")
-    } else if cfg!(target_os = "haiku") {
-        PathBuf::from(HAIKU_PRNSD)
-    } else {
-        PathBuf::from("/usr/lib/retifs/prnsd")
-    };
-    if bundled.is_file() {
-        return Some(bundled);
+    if cfg!(target_os = "haiku") && Path::new(HAIKU_PRNSD).is_file() {
+        return Some(PathBuf::from(HAIKU_PRNSD));
     }
     if let Some(base) = std::env::var_os("LOCALAPPDATA") {
-        for name in ["prnsd\\prnsd-managed.exe"] {
-            let p = PathBuf::from(&base).join(name);
-            if p.is_file() {
-                return Some(p);
-            }
+        let p = PathBuf::from(base).join("prnsd\\prnsd-managed.exe");
+        if p.is_file() {
+            return Some(p);
         }
     }
     let exe = if cfg!(windows) { "prnsd.exe" } else { "prnsd" };
-    std::env::var_os("PATH").and_then(|paths| std::env::split_paths(&paths).map(|d| d.join(exe)).find(|p| p.is_file()))
+    let cargo = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).map(|h| PathBuf::from(h).join(".cargo").join("bin"));
+    std::env::var_os("PATH")
+        .map(|paths| std::env::split_paths(&paths).collect::<Vec<_>>())
+        .unwrap_or_default()
+        .into_iter()
+        .chain(cargo)
+        .map(|d| d.join(exe))
+        .find(|p| p.is_file())
 }
 
 /// Parses `prnsd status --json`.
@@ -100,7 +95,7 @@ pub fn reticulum() -> Reticulum {
     let Some(bin) = prnsd() else {
         return Reticulum { error: Some("prnsd not found (install the retifs package, or prnsd)".into()), ..Default::default() };
     };
-    let out = Command::new(&bin).args(["status", "--json"]).output();
+    let out = prnsd_command(&bin).args(["status", "--json"]).output();
     let mut r = match out {
         Ok(o) if o.status.success() => parse_status(&String::from_utf8_lossy(&o.stdout)).unwrap_or_else(|e| Reticulum { error: Some(e), ..Default::default() }),
         Ok(o) => Reticulum { error: Some(first_line(&o.stderr, "no Reticulum shared instance is running")), ..Default::default() },
@@ -137,54 +132,55 @@ pub fn parse_list(text: &str) -> Vec<Configured> {
 /// The interfaces in the Reticulum configuration, enabled or not.
 pub fn configured() -> Result<Vec<Configured>, String> {
     let bin = prnsd().ok_or("prnsd not found")?;
-    let o = Command::new(bin).args(["interfaces", "list"]).output().map_err(|e| e.to_string())?;
+    let o = prnsd_command(&bin).args(["interfaces", "list"]).output().map_err(|e| e.to_string())?;
     if o.status.success() { Ok(parse_list(&String::from_utf8_lossy(&o.stdout))) } else { Err(first_line(&o.stderr, "prnsd interfaces list failed")) }
 }
 
 fn run_prnsd(args: &[&str]) -> Result<(), String> {
     let bin = prnsd().ok_or("prnsd not found")?;
-    let o = Command::new(bin).args(args).output().map_err(|e| e.to_string())?;
+    let o = prnsd_command(&bin).args(args).output().map_err(|e| e.to_string())?;
     if o.status.success() { Ok(()) } else { Err(first_line(&o.stderr, "prnsd failed")) }
 }
 
-/// Changes the Reticulum configuration and puts it to use: a managed prnsd
-/// (`prnsd start`, Windows) applies it live; the package's service runs
-/// `prnsd run`, which can't, so it's restarted.
-fn reconfigure(args: &[&str]) -> Result<(), String> {
-    // An app that runs prnsd itself (Android) restarts it after the change.
-    if std::env::var("RETIFS_PRNSD_APPLY").as_deref() == Ok("restart") {
-        return run_prnsd(args);
+/// prnsd asked something: on Windows without a console window of its own
+/// (prnsd is a console program; the utility asks it every few seconds).
+fn prnsd_command(bin: &Path) -> Command {
+    #[allow(unused_mut)]
+    let mut cmd = Command::new(bin);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(CREATE_NO_WINDOW);
     }
-    if service_state(BUNDLED).as_deref() == Some("active") {
-        run_prnsd(args)?;
-        service(BUNDLED, "restart")?;
-        // retifsd doesn't attach to a new shared instance by itself (on
-        // Linux the unit is PartOf prnsd's): restarted after it.
-        #[cfg(target_os = "haiku")]
-        {
-            std::thread::sleep(std::time::Duration::from_secs(2));
-            service(RETIFSD, "restart")?;
-        }
-        Ok(())
-    } else {
-        let mut with = args.to_vec();
-        with.push("--apply");
-        run_prnsd(&with)
-    }
+    cmd
 }
 
-/// The package's Reticulum service.
-#[cfg(not(any(windows, target_os = "haiku")))]
-const BUNDLED: &str = "retifs-prnsd.service";
+/// Changes the Reticulum configuration and puts it to use: a managed prnsd
+/// (`prnsd start`) applies it live; the Prns package's job on Haiku runs
+/// `prnsd run`, which can't, so it's restarted.
+fn reconfigure(args: &[&str]) -> Result<(), String> {
+    #[cfg(target_os = "haiku")]
+    if service_state(PRNS_JOB).as_deref() == Some("active") {
+        run_prnsd(args)?;
+        service(PRNS_JOB, "restart")?;
+        // retifsd doesn't attach to a new shared instance by itself:
+        // restarted after it.
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        return service(RETIFSD, "restart");
+    }
+    let mut with = args.to_vec();
+    with.push("--apply");
+    run_prnsd(&with)
+}
+
+/// The Prns package's Reticulum job (Haiku).
 #[cfg(target_os = "haiku")]
-const BUNDLED: &str = "x-vnd.prns-prnsd";
+const PRNS_JOB: &str = "x-vnd.prns-prnsd";
 /// On Haiku Reticulum is the Prns package's: prnsd, and its start script
 /// (which writes a new user's first configuration).
 const HAIKU_PRNSD: &str = "/boot/system/bin/prnsd";
 #[cfg(target_os = "haiku")]
 const HAIKU_PRNSD_START: &str = "/boot/system/apps/Prns/prnsd-start";
-#[cfg(windows)]
-const BUNDLED: &str = "prnsd";
 
 /// Adds a TCP connection to another Reticulum node.
 pub fn add_tcp(name: &str, host: &str, port: u16) -> Result<(), String> {
@@ -202,10 +198,11 @@ pub fn remove_interface(name: &str) -> Result<(), String> {
 
 /// The user services the retifs package installs (Linux, systemd).
 #[cfg(not(any(windows, target_os = "haiku")))]
-pub const SERVICES: &[(&str, &str)] = &[("retifsd.service", "retifs daemon"), ("retifs-prnsd.service", "Reticulum (bundled prnsd)"), ("retifs-gateway.service", "Libraries as local websites")];
+pub const SERVICES: &[(&str, &str)] = &[("retifsd.service", "retifs daemon"), ("retifs-gateway.service", "Libraries as local websites")];
 /// On Windows: the programs next to the utility, which it starts itself.
+/// Reticulum is Prns's (or another shared instance), not one of them.
 #[cfg(windows)]
-pub const SERVICES: &[(&str, &str)] = &[("retifsd", "retifs daemon"), ("prnsd", "Reticulum (bundled prnsd)")];
+pub const SERVICES: &[(&str, &str)] = &[("retifsd", "retifs daemon"), ("retifs-cloudfiles", "Libraries in Explorer")];
 /// On Haiku: launch_daemon jobs of the user's (`~/config/settings/launch/retifs`,
 /// or a package's `data/user_launch`), started at login; Reticulum is the
 /// Prns package's.
@@ -249,7 +246,7 @@ pub fn service_state(job: &str) -> Option<String> {
 fn job_program(job: &str) -> Option<(&'static str, PathBuf, PathBuf)> {
     match job {
         "x-vnd.retifs-daemon" => Some(("retifsd", install_dir().join("bin/retifsd"), install_dir().join("bin/retifsd"))),
-        BUNDLED => Some(("prnsd", PathBuf::from(HAIKU_PRNSD_START), PathBuf::from(HAIKU_PRNSD))),
+        PRNS_JOB => Some(("prnsd", PathBuf::from(HAIKU_PRNSD_START), PathBuf::from(HAIKU_PRNSD))),
         _ => None,
     }
 }
@@ -296,7 +293,7 @@ fn run_program(job: &str, action: &str) -> Result<(), String> {
         }
         // Reticulum first, as the job requires it.
         if prog == "retifsd" && !shared_instance_up() && Path::new(HAIKU_PRNSD_START).is_file() {
-            run_program(BUNDLED, "start")?;
+            run_program(PRNS_JOB, "start")?;
             for _ in 0..30 {
                 if shared_instance_up() {
                     break;
@@ -401,8 +398,7 @@ fn running(exe: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// A program's state: "active" while it runs ("prnsd": this install's own,
-/// not another prnsd the user runs).
+/// A program's state: "active" while it runs.
 #[cfg(windows)]
 pub fn service_state(name: &str) -> Option<String> {
     Some(if running(&format!("{name}.exe")) { "active" } else { "inactive" }.to_string())
@@ -419,13 +415,12 @@ pub fn service(name: &str, action: &str) -> Result<(), String> {
         std::thread::sleep(std::time::Duration::from_millis(500));
     }
     if action == "start" || action == "restart" {
-        if name == "prnsd" && shared_instance_up() {
-            return Err("another Reticulum runs on this machine already".into());
-        }
         let logs = PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_default()).join("retifs").join("logs");
         std::fs::create_dir_all(&logs).map_err(|e| e.to_string())?;
         let log = std::fs::OpenOptions::new().create(true).append(true).open(logs.join(format!("{name}.log"))).map_err(|e| e.to_string())?;
-        let args: &[&str] = if name == "prnsd" { &["run"] } else { &[] };
+        // The Cloud Files provider: every library, a folder each of
+        // %USERPROFILE%\retifs.
+        let args: &[&str] = if name == "retifs-cloudfiles" { &["--all"] } else { &[] };
         Command::new(install_dir().join(&exe))
             .args(args)
             .stdout(log.try_clone().map_err(|e| e.to_string())?)
@@ -438,27 +433,31 @@ pub fn service(name: &str, action: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// At login (Windows): Reticulum where none runs yet, then retifs. Says what
-/// it did.
+/// At login (Windows): retifsd once Reticulum is up, and the libraries in
+/// Explorer (which wait for retifsd themselves). Says what it did.
 #[cfg(windows)]
 pub fn supervise() -> Vec<String> {
     let mut did = Vec::new();
-    if !shared_instance_up() && install_dir().join("prnsd.exe").is_file() {
-        match service("prnsd", "start") {
-            Ok(()) => did.push("started Reticulum (prnsd)".to_string()),
-            Err(e) => did.push(format!("Reticulum: {e}")),
+    // retifsd can't join a shared instance that isn't there yet: Prns may
+    // start after the utility at login.
+    for _ in 0..60 {
+        if shared_instance_up() {
+            break;
         }
-        for _ in 0..30 {
-            if shared_instance_up() {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(500));
-        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
     }
-    if !running("retifsd.exe") {
+    if !shared_instance_up() {
+        did.push("no Reticulum yet: start Prns (or another shared instance)".to_string());
+    } else if !running("retifsd.exe") {
         match service("retifsd", "start") {
             Ok(()) => did.push("started retifsd".to_string()),
             Err(e) => did.push(format!("retifsd: {e}")),
+        }
+    }
+    if install_dir().join("retifs-cloudfiles.exe").is_file() && !running("retifs-cloudfiles.exe") {
+        match service("retifs-cloudfiles", "start") {
+            Ok(()) => did.push("libraries in Explorer".to_string()),
+            Err(e) => did.push(format!("retifs-cloudfiles: {e}")),
         }
     }
     did

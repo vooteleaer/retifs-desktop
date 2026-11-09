@@ -26,6 +26,7 @@ Native widgets on each platform (the user's choice, 2026-10-21: no webview), ove
 - **Haiku:** a BeAPI app; Tracker already shows attributes.
 - The tray: StatusNotifierItem on Linux (KDE natively, GNOME with the AppIndicator extension; built 2026-10-29), the notification area on Windows.
 - `libretifs` comes from the retifs repo (a path or git dependency).
+- **Android: other apps' access.** retifsd's sockets are in this app's private files, out of other apps' reach, so this app connects for them (as Prns's hub hands out Reticulum connections): an app (retifs Photos, retifs Map) binds `AccessService` (action `org.retifs.action.ACCESS`) and gets a connection already past its `Hello`. The user lets an app in once (`AccessActivity`, action `org.retifs.action.LET_IN`, started for a result): the libraries it may use, ticked by purpose (retifs ADR-0032) or generic, and whether it may change them. That makes it an app with its own token (retifs ADR-0004, named `android:<package>`), which stays in this app: the other app never holds it, and retifsd checks every request against it. An app is known by its package and signing certificate. Started again, the same dialog changes or removes its access.
 
 ## Views
 | View | Shows | Local API today |

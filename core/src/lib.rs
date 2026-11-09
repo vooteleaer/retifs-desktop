@@ -11,6 +11,7 @@
 
 pub mod api;
 pub mod device;
+pub mod files;
 pub mod status_icon;
 
 use std::{collections::HashMap, path::PathBuf};
@@ -83,6 +84,17 @@ pub struct Status {
     pub error: Option<String>,
 }
 
+/// What a library may be for (ADR-0032), as the utilities offer it: (word,
+/// label). None of them: a generic library.
+pub const PURPOSES: [(&str, &str); 4] = [("contacts", "Contacts"), ("calendar", "Calendar"), ("photos", "Photos"), ("files", "Files")];
+/// The record that says what a library is for (ADR-0032).
+pub const LIBRARY_TYPE: &str = "retifs.library";
+/// What leaving a library says: one joined, and one made on this device.
+pub const LEAVE: &str = "Its records go from this device. Others who have it keep theirs; you can join it again.";
+pub const LEAVE_OWN: &str = "It was made on this device. Its records go from here; members on other devices keep theirs and can still use it. If no other device has it, it's gone for good.";
+/// What deleting a library everywhere says (retifs ADR-0034).
+pub const DELETE: &str = "Every record goes, on every member's device: each lets the library go as it hears of it, and one that was away does when it's back (within 30 days). What someone already copied out of it stays theirs. This can't be undone.";
+
 /// The store the local daemon owns (`$RETIFS_STORE`, else the platform default).
 pub fn default_store() -> PathBuf {
     libretifs::default_store_dir()
@@ -122,7 +134,7 @@ impl Daemon {
         &self.store
     }
 
-    fn client(&self) -> Result<Client, String> {
+    pub(crate) fn client(&self) -> Result<Client, String> {
         self.rt.block_on(Client::connect(&self.store)).map_err(|e| e.to_string())
     }
 
@@ -138,7 +150,7 @@ impl Daemon {
         }
     }
 
-    fn request(&self, c: &mut Client, req: Request) -> Result<Response, String> {
+    pub(crate) fn request(&self, c: &mut Client, req: Request) -> Result<Response, String> {
         match self.rt.block_on(c.call(req)).map_err(|e| e.to_string())? {
             Response::Error { message } => Err(message),
             r => Ok(r),
@@ -176,9 +188,21 @@ impl Daemon {
     }
 
     /// Leaves a library on this device (others keep their copies).
+    /// Leaves `ns` on this device. One made here too: the front ends say
+    /// so before asking (see [`LEAVE_OWN`]).
     pub fn leave(&self, ns: &str) -> Result<(), String> {
         let mut c = self.client()?;
-        self.request(&mut c, Request::NsLeave { ns: ns.into(), mine: false }).map(|_| ())
+        let mine = match self.request(&mut c, Request::NsInfo { ns: ns.into() })? {
+            Response::Namespace(v) => v.address.split(':').nth(2) == Some(v.own_writer.as_str()),
+            _ => false,
+        };
+        self.request(&mut c, Request::NsLeave { ns: ns.into(), mine }).map(|_| ())
+    }
+
+    /// Deletes `ns` on every member's device (only a member who may invite).
+    pub fn delete_library(&self, ns: &str) -> Result<(), String> {
+        let mut c = self.client()?;
+        self.request(&mut c, Request::NsDelete { ns: ns.into() }).map(|_| ())
     }
 
     /// The namespaces a search may look in (all but `me`).
@@ -287,11 +311,37 @@ impl Daemon {
                 j["public"] = public.into();
                 j["favorite"] = favorite.into();
                 j["coming"] = v.coming().into();
+                j["for"] = self.purpose(&v.name).unwrap_or_default().into();
                 (v.name == saved::ME, !favorite, v.name.to_lowercase(), j)
             })
             .collect();
         out.sort_by(|a, b| (a.0, a.1, &a.2).cmp(&(b.0, b.1, &b.2)));
         Ok(serde_json::Value::Array(out.into_iter().map(|(_, _, _, j)| j).collect()))
+    }
+
+    /// Lets an application use retifs (retifs ADR-0004): only `namespaces`,
+    /// writing there if `write`. Its token, shown only now; the same name
+    /// again replaces the app (and its old token).
+    pub fn app_add(&self, name: &str, namespaces: Vec<String>, write: bool) -> Result<String, String> {
+        let mut c = self.client()?;
+        match self.request(&mut c, Request::AppAdd { name: name.into(), namespaces, write, device: None, keys: Vec::new() })? {
+            Response::AppToken { token } => Ok(token),
+            _ => Err("unexpected answer".into()),
+        }
+    }
+
+    pub fn app_remove(&self, name: &str) -> Result<(), String> {
+        let mut c = self.client()?;
+        self.request(&mut c, Request::AppRemove { name: name.into() }).map(|_| ())
+    }
+
+    /// A connection to the app socket as the app with `token`, past its
+    /// `Hello`, to hand to that app (on Android it can't reach the socket in
+    /// this app's files itself).
+    #[cfg(unix)]
+    pub fn app_connect(&self, token: &str) -> Result<std::os::unix::net::UnixStream, String> {
+        let c = self.rt.block_on(Client::connect_app(&self.store, token)).map_err(|e| e.to_string())?;
+        self.rt.block_on(async { c.into_std() }).map_err(|e| e.to_string())
     }
 
     pub fn keep(&self, ns: &str, all: bool) -> Result<(), String> {
@@ -433,6 +483,94 @@ impl Daemon {
             Response::Error { message } => Err(message),
             _ => Ok(()),
         }
+    }
+
+    /// What library `ns` is for (ADR-0032): its `retifs.library` record's
+    /// `for` (every one's, should members have made two), and `calendar` for
+    /// one with a `retifs.calendar` record (ADR-0024). Empty: a generic one.
+    ///
+    /// Asked again only when the library has changed (its change count):
+    /// on a lazily held library each lookup is a search at its peers, and
+    /// front ends ask with every refresh.
+    pub fn purpose(&self, ns: &str) -> Result<Vec<String>, String> {
+        static KNOWN: std::sync::Mutex<Option<HashMap<(PathBuf, String), (u64, Vec<String>)>>> = std::sync::Mutex::new(None);
+        let key = (self.store.clone(), ns.to_string());
+        let count = {
+            let mut c = self.client()?;
+            match self.request(&mut c, Request::Watch { ns: ns.into(), since: 0, timeout_ms: 0 }) {
+                Ok(Response::Changed { count }) => Some(count),
+                _ => None,
+            }
+        };
+        let known = KNOWN.lock().unwrap().as_ref().and_then(|k| k.get(&key).cloned());
+        if let (Some(count), Some((at, words))) = (count, known) {
+            if at == count {
+                return Ok(words);
+            }
+        }
+        let words = self.purpose_now(ns)?;
+        if let Some(count) = count {
+            KNOWN.lock().unwrap().get_or_insert_with(HashMap::new).insert(key, (count, words.clone()));
+        }
+        Ok(words)
+    }
+
+    fn purpose_now(&self, ns: &str) -> Result<Vec<String>, String> {
+        let mut c = self.client()?;
+        let mut out: Vec<String> = Vec::new();
+        for r in self.purpose_records(&mut c, ns)? {
+            for (k, v) in &r.attrs {
+                if k == "for" {
+                    let words: Vec<String> = match v {
+                        AttrValue::List(items) => items.iter().filter_map(|i| if let AttrValue::Str(s) = i { Some(s.clone()) } else { None }).collect(),
+                        AttrValue::Str(s) => s.split(',').map(|w| w.trim().to_string()).collect(),
+                        _ => Vec::new(),
+                    };
+                    out.extend(words.into_iter().filter(|w| !w.is_empty()));
+                }
+            }
+        }
+        if let Response::Records { records } = self.request(&mut c, Request::Query { ns: ns.into(), terms: vec!["type=retifs.calendar".into()], at: None })? {
+            if !records.is_empty() {
+                out.push("calendar".into());
+            }
+        }
+        out.sort();
+        out.dedup();
+        Ok(out)
+    }
+
+    fn purpose_records(&self, c: &mut Client, ns: &str) -> Result<Vec<RecordView>, String> {
+        match self.request(c, Request::Query { ns: ns.into(), terms: vec![format!("type={LIBRARY_TYPE}")], at: None })? {
+            Response::Records { records } => Ok(records),
+            _ => Ok(Vec::new()),
+        }
+    }
+
+    /// Says what library `ns` is for: `purposes` from [`PURPOSES`] (none:
+    /// generic). Words other apps added are kept. One record, written over.
+    pub fn set_purpose(&self, ns: &str, purposes: &[String]) -> Result<(), String> {
+        let known: Vec<&str> = PURPOSES.iter().map(|(k, _)| *k).collect();
+        let mut words: Vec<String> = self.purpose(ns)?.into_iter().filter(|w| !known.contains(&w.as_str())).collect();
+        words.extend(purposes.iter().filter(|p| known.contains(&p.as_str())).cloned());
+        words.sort();
+        words.dedup();
+        let value = AttrValue::List(words.into_iter().map(AttrValue::Str).collect());
+        let mut c = self.client()?;
+        let records = self.purpose_records(&mut c, ns)?;
+        match records.split_first() {
+            Some((first, extra)) => {
+                self.request(&mut c, Request::RecordSet { ns: ns.into(), id: first.id.clone(), attrs: vec![("for".into(), value)], unset: Vec::new(), data: None })?;
+                for r in extra {
+                    self.request(&mut c, Request::RecordDelete { ns: ns.into(), id: r.id.clone() })?;
+                }
+            }
+            None => {
+                let attrs = vec![("type".into(), AttrValue::Str(LIBRARY_TYPE.into())), ("for".into(), value)];
+                self.request(&mut c, Request::RecordCreate { ns: ns.into(), attrs, data: None })?;
+            }
+        }
+        Ok(())
     }
 
     /// The local name a namespace link or invitation suggests.

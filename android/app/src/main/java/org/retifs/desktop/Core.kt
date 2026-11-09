@@ -13,19 +13,55 @@ object Core {
         System.loadLibrary("retifs_desktop")
     }
 
-    external fun init(home: String, store: String, prnsd: String)
+    external fun init(home: String, store: String)
     external fun status(): String
-    external fun reticulum(): String
+    /** Whether retifsd answers: a ping, nothing more (status asks about every library). */
+    external fun up(): Boolean
     external fun sharedInstanceUp(): Boolean
-    external fun addTcp(name: String, host: String, port: Int): String
-    external fun setInterface(name: String, enabled: Boolean): String
-    external fun removeInterface(name: String): String
     external fun settings(): String
     external fun saveSettings(values: String): String
     external fun heard(): String
     external fun join(address: String): String
+    /** Joins with an invitation or `retifs:` link; `name` empty: the link's. */
+    external fun openLink(link: String, name: String): String
+
+    // Libraries as files (DocumentsProvider). Paths are a library's own ("/a/b.txt").
+    /** `["name", …]` or `{"error"}`. */
+    external fun docLibraries(): String
+    /** `[{name, path, dir, size, mtime}]` or `{"error"}`. */
+    external fun docList(ns: String, dir: String): String
+    /** One entry, `null`, or `{"error"}`. */
+    external fun docStat(ns: String, path: String): String
+    external fun docRead(ns: String, path: String, dest: String): String
+    external fun docWrite(ns: String, path: String, src: String): String
+    external fun docMkdir(ns: String, path: String): String
+    external fun docRemove(ns: String, path: String): String
+    external fun docRename(ns: String, from: String, to: String): String
+
+    // Contacts for the sync adapter (the system's Contacts).
+    /** `[{"ns", "writable"}]` or `{"error"}`. */
+    external fun contactLibraries(): String
+    /** The contacts in `libraries` (a JSON array): `[{ns, id, values}]` or `{"error"}`. */
+    external fun contacts(libraries: String): String
+    /** Saves `{ns, id, values}` (`before` as it was, or "null"): as saved, or `{"error"}`. */
+    external fun contactSave(contact: String, before: String): String
+    external fun contactDelete(ns: String, id: String): String
+
+    // Events for the calendar sync adapter (the system's Calendar).
+    /** `[{"ns", "writable", "color"}]` or `{"error"}`. */
+    external fun calendarLibraries(): String
+    /** Library `ns`'s events: `[{ns, id, values}]` or `{"error"}`. */
+    external fun calendarEvents(ns: String): String
+    /** Saves `{ns, id, values}` (`before` as it was, or "null"): as saved, or `{"error"}`. */
+    external fun calendarSave(event: String, before: String): String
+    external fun calendarDelete(ns: String, id: String): String
     external fun leave(ns: String): String
-    external fun create(name: String, public: Boolean): String
+    /** Deletes a library on every member's device (retifs ADR-0034; only one who may invite). */
+    external fun deleteLibrary(ns: String): String
+    /** A new library; `purposes` what it's for, "contacts,calendar" (ADR-0032; "": generic). */
+    external fun create(name: String, public: Boolean, purposes: String): String
+    /** Says what a library is for, as `create` takes it. */
+    external fun setPurpose(ns: String, purposes: String): String
     external fun keep(ns: String, all: Boolean): String
     external fun favorite(ns: String, on: Boolean): String
     external fun announce(ns: String, on: Boolean): String
@@ -38,6 +74,12 @@ object Core {
     external fun cancelInvite(ns: String, id: String): String
     external fun removeMember(ns: String, writer: String): String
 
+    /** Lets an app (by its retifs name) use `namespaces` (JSON array): its token, or "error: …". */
+    external fun appAdd(name: String, namespaces: String, write: Boolean): String
+    external fun appRemove(name: String): String
+    /** A connection to retifsd as the app with `token`, past its Hello: a descriptor, or -1. */
+    external fun appConnect(token: String): Int
+
     /** Where everything lives for this app. */
     class Paths(context: Context) {
         val home: File = context.filesDir
@@ -45,7 +87,6 @@ object Core {
         val logs: File = File(context.filesDir, "logs")
         private val native = File(context.applicationInfo.nativeLibraryDir)
         val retifsd: File = File(native, "libretifsd.so")
-        val prnsd: File = File(native, "libprnsd.so")
     }
 
     @Volatile private var ready = false
@@ -56,7 +97,7 @@ object Core {
         val p = Paths(context)
         p.store.mkdirs()
         p.logs.mkdirs()
-        init(p.home.absolutePath, p.store.absolutePath, p.prnsd.absolutePath)
+        init(p.home.absolutePath, p.store.absolutePath)
         ready = true
     }
 }

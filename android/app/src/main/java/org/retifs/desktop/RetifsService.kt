@@ -8,7 +8,6 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
-import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
 import org.json.JSONArray
@@ -16,17 +15,15 @@ import org.json.JSONObject
 import java.io.File
 
 /**
- * Keeps retifs running: Reticulum (the bundled prnsd) where no other app
- * runs a shared instance, then retifsd, both as programs from the app's
- * native libraries, restarted if they stop. Its notification is Android's
+ * Keeps retifsd running (a program from the app's native libraries),
+ * restarted if it stops. Reticulum is Prns's app (or another one with a
+ * shared instance): retifsd joins it once it's up, as on the desktop. Its notification is Android's
  * tray: the same state as the desktop icon, with Open and Stop.
  */
 class RetifsService : Service() {
-    private var prnsd: Process? = null
     private var retifsd: Process? = null
     @Volatile private var running = false
     private var supervisor: Thread? = null
-    private var multicast: WifiManager.MulticastLock? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -40,14 +37,6 @@ class RetifsService : Service() {
                 retifsd?.destroy()
                 return START_STICKY
             }
-            ACTION_RESTART_RETICULUM -> {
-                // retifsd follows: its link to the shared instance goes with it.
-                prnsd?.destroy()
-                retifsd?.destroy()
-                supervisor?.interrupt()
-                supervisor = Thread(::supervise, "retifs-supervisor").apply { start() }
-                return START_STICKY
-            }
         }
         if (running) return START_STICKY
         Core.ready(this)
@@ -58,20 +47,23 @@ class RetifsService : Service() {
         } else {
             startForeground(NOTIFICATION, notification)
         }
-        // AutoInterface: others on the same Wi-Fi.
-        multicast = (applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager)
-            .createMulticastLock("retifs").apply { setReferenceCounted(false); acquire() }
         running = true
         supervisor = Thread(::supervise, "retifs-supervisor").apply { start() }
+        // The address books in the system's Contacts, after a boot or an
+        // update too (once the user has allowed it).
+        val calendarAllowed = checkSelfPermission(android.Manifest.permission.WRITE_CALENDAR) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        if (contactsAllowed() || calendarAllowed) Accounts.ensure(this)
+        if (contactsAllowed()) Accounts.syncContacts(this)
+        if (calendarAllowed) Accounts.syncCalendars()
         return START_STICKY
     }
+
+    private fun contactsAllowed() = checkSelfPermission(android.Manifest.permission.WRITE_CONTACTS) == android.content.pm.PackageManager.PERMISSION_GRANTED
 
     override fun onDestroy() {
         running = false
         supervisor?.interrupt()
         retifsd?.destroy()
-        prnsd?.destroy()
-        multicast?.release()
         super.onDestroy()
     }
 
@@ -87,57 +79,48 @@ class RetifsService : Service() {
             .start()
     }
 
-    /**
-     * Reticulum's settings at first start. The shared instance on localhost
-     * TCP (as on Windows): on Android Prns's clients look for it there, and
-     * other apps (Sideband) can share it too.
-     */
-    private fun reticulumConfig(home: File) {
-        val dir = File(home, ".reticulum")
-        val config = File(dir, "config")
-        if (config.exists()) return
-        dir.mkdirs()
-        config.writeText(
-            """
-            |[reticulum]
-            |  share_instance = Yes
-            |  shared_instance_type = tcp
-            |  shared_instance_port = 37428
-            |  instance_control_port = 37429
-            |  enable_transport = No
-            |
-            |[interfaces]
-            |  [[Default Interface]]
-            |    type = AutoInterface
-            |    enabled = Yes
-            |""".trimMargin(),
-        )
+    private fun prnsApp(): Boolean = try {
+        packageManager.getPackageInfo(PRNS_APP, 0)
+        true
+    } catch (e: Exception) {
+        false
     }
 
     /** Starts what's missing, every few seconds, and says how it is. */
     private fun supervise() {
         val p = Core.Paths(this)
-        reticulumConfig(p.home)
         var firstStart = true
+        var booksAt = System.currentTimeMillis()
+        var downs = 0
         while (running) {
             try {
-                if (prnsd?.isAlive != true && !Core.sharedInstanceUp()) {
-                    // A new shared instance: retifsd's link to the old one is gone,
-                    // and it doesn't attach again by itself.
-                    retifsd?.destroy()
-                    prnsd = start(p.prnsd, "prnsd", "run")
-                    for (i in 0 until 30) {
-                        if (Core.sharedInstanceUp()) break
-                        Thread.sleep(500)
-                    }
+                // A library that came (or went) with contacts: its address book, hourly.
+                if (System.currentTimeMillis() - booksAt > 3_600_000 && contactsAllowed()) {
+                    booksAt = System.currentTimeMillis()
+                    Accounts.syncContacts(this)
                 }
-                if (retifsd?.isAlive != true) {
+                // At boot retifs may come before Prns: retifsd starts once the
+                // shared instance is up (it can't join one that isn't).
+                val up = Core.sharedInstanceUp()
+                // Reticulum went away and came back (Prns restarted): retifsd
+                // doesn't attach to a new shared instance by itself. Away for
+                // two checks running: one missed check is a busy phone.
+                if (up && downs >= 2 && retifsd?.isAlive == true) {
+                    retifsd?.destroy()
+                    retifsd?.waitFor()
+                }
+                downs = if (up) 0 else downs + 1
+                if (retifsd?.isAlive != true && up) {
                     retifsd = start(p.retifsd, "retifsd")
                     if (firstStart) phoneDefaults()
                     firstStart = false
                 }
-                update()
-                Thread.sleep(15_000)
+                when {
+                    up -> update()
+                    prnsApp() -> update("waiting for Reticulum (Prns)")
+                    else -> update("no Reticulum: install Prns")
+                }
+                Thread.sleep(if (retifsd?.isAlive == true) 15_000 else 3_000)
             } catch (e: InterruptedException) {
                 return
             } catch (e: Exception) {
@@ -175,14 +158,7 @@ class RetifsService : Service() {
 
     private fun update(note: String? = null) {
         val text = note ?: try {
-            val s = JSONObject(Core.status())
-            val r = JSONObject(Core.reticulum())
-            val links = r.optJSONArray("connections")
-            var up = 0
-            for (i in 0 until (links?.length() ?: 0)) if (links!!.getJSONObject(i).optBoolean("up")) up++
-            val retifs = if (s.optBoolean("up")) "retifs running" else "retifs starting"
-            val ret = if (r.optBoolean("running")) "Reticulum: $up of ${links?.length() ?: 0} connection(s) up" else "no Reticulum"
-            "$retifs · $ret"
+            if (Core.up()) "retifs running" else "retifs starting"
         } catch (e: Exception) {
             "retifs: ${e.message}"
         }
@@ -212,9 +188,9 @@ class RetifsService : Service() {
         const val NOTIFICATION = 1
         /** Raised when phoneDefaults() gains a setting, so existing installs get it. */
         const val PHONE_DEFAULTS = 2
+        const val PRNS_APP = "org.personal.hopspot"
         const val ACTION_STOP = "org.retifs.desktop.STOP"
         const val ACTION_RESTART = "org.retifs.desktop.RESTART"
-        const val ACTION_RESTART_RETICULUM = "org.retifs.desktop.RESTART_RETICULUM"
 
         fun start(context: Context) {
             context.startForegroundService(Intent(context, RetifsService::class.java))
@@ -222,11 +198,6 @@ class RetifsService : Service() {
 
         fun restartDaemon(context: Context) {
             context.startService(Intent(context, RetifsService::class.java).setAction(ACTION_RESTART))
-        }
-
-        /** After a change to Reticulum's connections. */
-        fun restartReticulum(context: Context) {
-            context.startService(Intent(context, RetifsService::class.java).setAction(ACTION_RESTART_RETICULUM))
         }
 
         fun stop(context: Context) {

@@ -22,6 +22,11 @@ pub fn status() -> Value {
     })
 }
 
+/// Whether the daemon answers (a ping only: for a status line asked often).
+pub fn up() -> bool {
+    Daemon::new().status().up
+}
+
 /// Public libraries heard on the network.
 pub fn heard() -> Value {
     Daemon::new().heard().map(|l| json!(l)).unwrap_or_else(|e| json!({ "error": e }))
@@ -48,9 +53,31 @@ pub fn leave(ns: &str) -> Result<(), String> {
     Daemon::new().leave(ns)
 }
 
+/// Deletes library `ns` on every member's device.
+pub fn delete_library(ns: &str) -> Result<(), String> {
+    Daemon::new().delete_library(ns)
+}
+
 /// Makes a new library of this user's (its keys made here), named `name`.
 pub fn create(name: &str) -> Result<(), String> {
     Daemon::new().create_namespace(name)
+}
+
+/// A new library, said to be for `purposes` (ADR-0032; none: generic).
+pub fn create_library(name: &str, purposes: &[String]) -> Result<(), String> {
+    let d = Daemon::new();
+    d.create_namespace(name)?;
+    if purposes.is_empty() { Ok(()) } else { d.set_purpose(name, purposes) }
+}
+
+/// Says what a library is for (ADR-0032; none: generic).
+pub fn set_purpose(ns: &str, purposes: &[String]) -> Result<(), String> {
+    Daemon::new().set_purpose(ns, purposes)
+}
+
+/// "contacts,calendar" as words.
+pub fn purpose_words(csv: &str) -> Vec<String> {
+    csv.split(',').map(|w| w.trim().to_string()).filter(|w| !w.is_empty()).collect()
 }
 
 /// Keeps all of a library here (records and content, readable offline), or

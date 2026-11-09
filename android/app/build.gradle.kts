@@ -31,9 +31,9 @@ android {
         }
     }
 
-    // retifsd and prnsd run as programs from the native library folder
-    // (Android lets an app execute its native libraries, not files it writes):
-    // they must be extracted there, not left in the APK.
+    // retifsd runs as a program from the native library folder (Android
+    // lets an app execute its native libraries, not files it writes): it
+    // must be extracted there, not left in the APK.
     packaging { jniLibs { useLegacyPackaging = true } }
 
     compileOptions {

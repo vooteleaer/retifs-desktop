@@ -38,6 +38,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
@@ -71,6 +72,10 @@ fun LibraryCard(l: JSONObject, said: (String) -> Unit) {
     var members by remember { mutableStateOf(false) }
     var inviting by remember { mutableStateOf(false) }
     var leaving by remember { mutableStateOf(false) }
+    var deleting by remember { mutableStateOf(false) }
+    var purposing by remember { mutableStateOf(false) }
+    val purposes = l.optJSONArray("for")?.let { a -> (0 until a.length()).map { a.getString(it) } } ?: emptyList()
+    val mayWrite = l.optString("access").contains("write")
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(start = 16.dp, top = 8.dp, bottom = 12.dp, end = 4.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -87,6 +92,7 @@ fun LibraryCard(l: JSONObject, said: (String) -> Unit) {
                         else -> "content fetched as needed"
                     }
                     Text("${grouped(l.optLong("records"))} record(s) · ${l.optInt("peers")} peer(s) · $here", style = MaterialTheme.typography.bodySmall)
+                    Text(if (purposes.isEmpty()) "Generic" else "For " + purposes.joinToString(", "), style = MaterialTheme.typography.bodySmall)
                 }
                 IconButton(onClick = { menu = true }) { Icon(Icons.Filled.MoreVert, "What can be done with it") }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
@@ -128,7 +134,12 @@ fun LibraryCard(l: JSONObject, said: (String) -> Unit) {
                             }
                         },
                     )
-                    if (!me && !own) DropdownMenuItem(text = { Text("Leave library…") }, onClick = { menu = false; leaving = true })
+                    DropdownMenuItem(text = { Text("Use for…") }, enabled = mayWrite, onClick = { menu = false; purposing = true })
+                    if (!me) DropdownMenuItem(text = { Text("Leave library…") }, onClick = { menu = false; leaving = true })
+                    if (!me && mayInvite) DropdownMenuItem(
+                        text = { Text("Delete everywhere…", color = MaterialTheme.colorScheme.error) },
+                        onClick = { menu = false; deleting = true },
+                    )
                 }
             }
             if (l.optBoolean("coming")) {
@@ -146,10 +157,16 @@ fun LibraryCard(l: JSONObject, said: (String) -> Unit) {
     }
     if (members) MembersDialog(name, mayInvite, onInvite = { members = false; inviting = true }, said = said) { members = false }
     if (inviting) InviteDialog(name, said) { inviting = false }
+    if (purposing) PurposeDialog(name, purposes, said) { purposing = false }
     if (leaving) AlertDialog(
         onDismissRequest = { leaving = false },
         title = { Text("Leave $name?") },
-        text = { Text("Its records go from this phone. Others who have it keep theirs; you can join it again.") },
+        text = {
+            Text(
+                if (own) "It was made on this phone. Its records go from here; members on other devices keep theirs and can still use it. If no other device has it, it's gone for good."
+                else "Its records go from this phone. Others who have it keep theirs; you can join it again.",
+            )
+        },
         confirmButton = {
             TextButton(onClick = {
                 leaving = false
@@ -158,6 +175,27 @@ fun LibraryCard(l: JSONObject, said: (String) -> Unit) {
         },
         dismissButton = { TextButton(onClick = { leaving = false }) { Text("Cancel") } },
     )
+    if (deleting) {
+        // Typing its name: it can't be undone, and it reaches everyone's devices.
+        var typed by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { deleting = false },
+            title = { Text("Delete $name everywhere?") },
+            text = {
+                Column {
+                    Text("Every record goes, on every member's device: each lets the library go as it hears of it, and one that was away does when it's back (within 30 days). What someone already copied out of it stays theirs. This can't be undone.")
+                    OutlinedTextField(value = typed, onValueChange = { typed = it }, label = { Text("Type $name to delete it") }, singleLine = true, modifier = Modifier.padding(top = 12.dp))
+                }
+            },
+            confirmButton = {
+                TextButton(enabled = typed.trim() == name, onClick = {
+                    deleting = false
+                    scope.launch { said(core { Core.deleteLibrary(name) }.ifEmpty { "Deleted $name everywhere" }) }
+                }) { Text("Delete", color = if (typed.trim() == name) MaterialTheme.colorScheme.error else Color.Unspecified) }
+            },
+            dismissButton = { TextButton(onClick = { deleting = false }) { Text("Cancel") } },
+        )
+    }
 }
 
 /** A library's members and invitations not used yet. */
@@ -296,10 +334,76 @@ fun InviteDialog(ns: String, said: (String) -> Unit, close: () -> Unit) {
 
 /** A new library: its name, and whether to announce it as public. */
 @Composable
+fun PurposeChecks(chosen: MutableList<String>) {
+    Text("What it's for (none: a generic library)", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 12.dp))
+    for ((word, label) in PURPOSES) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Checkbox(checked = word in chosen, onCheckedChange = { if (it) chosen += word else chosen -= word })
+            Text(label)
+        }
+    }
+}
+
+/** What a library is for (ADR-0032): its contacts are an address book, its events a calendar… */
+@Composable
+fun PurposeDialog(ns: String, current: List<String>, said: (String) -> Unit, close: () -> Unit) {
+    val scope = rememberCoroutineScope()
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val chosen = remember { androidx.compose.runtime.mutableStateListOf<String>().apply { addAll(current) } }
+    AlertDialog(
+        onDismissRequest = close,
+        title = { Text("$ns is for") },
+        text = { Column { PurposeChecks(chosen) } },
+        confirmButton = {
+            Button(onClick = {
+                val words = PURPOSES.map { it.first }.filter { it in chosen }.joinToString(",")
+                close()
+                scope.launch {
+                    said(core { Core.setPurpose(ns, words) }.ifEmpty { if (words.isEmpty()) "$ns is a generic library" else "$ns is for ${words.replace(",", ", ")}" })
+                    Accounts.syncContacts(context)
+                }
+            }) { Text("Save") }
+        },
+        dismissButton = { TextButton(onClick = close) { Text("Cancel") } },
+    )
+}
+
+/** What a library may be for (ADR-0032), as the core has them. */
+val PURPOSES = listOf("contacts" to "Contacts", "calendar" to "Calendar", "photos" to "Photos", "files" to "Files")
+
+@Composable
+fun JoinLinkDialog(said: (String) -> Unit, close: () -> Unit) {
+    val scope = rememberCoroutineScope()
+    var link by remember { mutableStateOf("") }
+    var name by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = close,
+        title = { Text("Join a library") },
+        text = {
+            Column {
+                Text("Paste the invitation or link a member gave you.", style = MaterialTheme.typography.bodySmall)
+                OutlinedTextField(value = link, onValueChange = { link = it }, label = { Text("Link") }, singleLine = true)
+                OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Name here (optional)") }, singleLine = true)
+            }
+        },
+        confirmButton = {
+            Button(enabled = link.isNotBlank(), onClick = {
+                val (l, n) = link.trim() to name.trim()
+                close()
+                scope.launch { said(core { Core.openLink(l, n) }.ifEmpty { "Joined" }) }
+            }) { Text("Join") }
+        },
+        dismissButton = { TextButton(onClick = close) { Text("Cancel") } },
+    )
+}
+
+@Composable
 fun NewLibraryDialog(said: (String) -> Unit, close: () -> Unit) {
     val scope = rememberCoroutineScope()
+    val context = androidx.compose.ui.platform.LocalContext.current
     var name by remember { mutableStateOf("") }
     var public by remember { mutableStateOf(false) }
+    val purposes = remember { androidx.compose.runtime.mutableStateListOf<String>() }
     AlertDialog(
         onDismissRequest = close,
         title = { Text("New library") },
@@ -311,13 +415,18 @@ fun NewLibraryDialog(said: (String) -> Unit, close: () -> Unit) {
                     Text("Announce it on the network (public: anyone may read it)")
                 }
                 Text("A private one is shared from its menu: members and invitations.", style = MaterialTheme.typography.bodySmall)
+                PurposeChecks(purposes)
             }
         },
         confirmButton = {
             Button(enabled = name.isNotBlank(), onClick = {
                 val n = name.trim()
+                val words = PURPOSES.map { it.first }.filter { it in purposes }.joinToString(",")
                 close()
-                scope.launch { said(core { Core.create(n, public) }.ifEmpty { "Made $n" }) }
+                scope.launch {
+                    said(core { Core.create(n, public, words) }.ifEmpty { "Made $n" })
+                    if ("contacts" in purposes) Accounts.syncContacts(context)
+                }
             }) { Text("Create") }
         },
         dismissButton = { TextButton(onClick = close) { Text("Cancel") } },

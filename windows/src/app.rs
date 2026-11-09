@@ -222,7 +222,7 @@ pub fn run() {
         };
         MAIN.store(hwnd.0 as isize, Ordering::SeqCst);
         build(hwnd, icons);
-        // At login: Reticulum where none runs, then retifs; the window stays hidden.
+        // At login: retifs once Reticulum (Prns's) is up; the window stays hidden.
         if autostart {
             std::thread::spawn(|| {
                 let did = device::supervise();

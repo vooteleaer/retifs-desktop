@@ -17,7 +17,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
@@ -25,7 +24,6 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -63,22 +61,44 @@ import org.json.JSONObject
 
 /**
  * retifs on Android: this device (the node, storage, libraries), Reticulum
- * and its connections, and the settings. The same three views as the
+ * (Prns's app, which retifs joins), and the settings. The same three views as the
  * desktop utility, over the same core.
  */
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Core.ready(this)
-        if (Build.VERSION.SDK_INT >= 33) {
-            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
-        }
+        val wanted = mutableListOf(
+            Manifest.permission.READ_CONTACTS, Manifest.permission.WRITE_CONTACTS,
+            Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR,
+        )
+        if (Build.VERSION.SDK_INT >= 33) wanted += Manifest.permission.POST_NOTIFICATIONS
+        val missing = wanted.filter { checkSelfPermission(it) != android.content.pm.PackageManager.PERMISSION_GRANTED }
+        if (missing.isNotEmpty()) requestPermissions(missing.toTypedArray(), 1)
+        sync()
         RetifsService.start(this)
         setContent {
             MaterialTheme(colorScheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()) {
                 App()
             }
         }
+    }
+
+    private fun allowed(p: String) = checkSelfPermission(p) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+    /** retifs contacts and calendars in the system's own: the account, and a sync now (what's allowed). */
+    private fun sync() {
+        val contacts = allowed(Manifest.permission.WRITE_CONTACTS)
+        val calendar = allowed(Manifest.permission.WRITE_CALENDAR)
+        if (!contacts && !calendar) return
+        Accounts.ensure(this)
+        if (contacts) Accounts.syncContacts(this)
+        if (calendar) Accounts.syncCalendars()
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        sync()
     }
 }
 
@@ -98,23 +118,23 @@ fun human(n: Long): String {
 fun App() {
     var tab by remember { mutableIntStateOf(0) }
     var status by remember { mutableStateOf(JSONObject()) }
-    var reticulum by remember { mutableStateOf(JSONObject()) }
+    var reticulum by remember { mutableStateOf(false) }
     var tick by remember { mutableIntStateOf(0) }
     var note by remember { mutableStateOf("") }
     LaunchedEffect(tick) {
         while (true) {
             status = JSONObject(core { Core.status() })
-            reticulum = JSONObject(core { Core.reticulum() })
+            reticulum = core { Core.sharedInstanceUp() }
             delay(5_000)
         }
     }
     val refresh = { tick++ }
     Scaffold(
-        topBar = { TopAppBar(title = { Text(listOf("retifs", "Network", "Settings")[tab]) }) },
+        topBar = { TopAppBar(title = { Text(listOf("retifs", "Announces", "Settings")[tab]) }) },
         bottomBar = {
             NavigationBar {
                 NavigationBarItem(selected = tab == 0, onClick = { tab = 0 }, icon = { Icon(Icons.Filled.Home, null) }, label = { Text("This device") })
-                NavigationBarItem(selected = tab == 1, onClick = { tab = 1 }, icon = { Icon(Icons.Filled.Share, null) }, label = { Text("Network") })
+                NavigationBarItem(selected = tab == 1, onClick = { tab = 1 }, icon = { Icon(Icons.Filled.Share, null) }, label = { Text("Announces") })
                 NavigationBarItem(selected = tab == 2, onClick = { tab = 2 }, icon = { Icon(Icons.Filled.Settings, null) }, label = { Text("Settings") })
             }
         },
@@ -124,8 +144,8 @@ fun App() {
                 Text(note, Modifier.padding(horizontal = 16.dp, vertical = 4.dp), style = MaterialTheme.typography.bodySmall)
             }
             when (tab) {
-                0 -> Overview(status) { note = it; refresh() }
-                1 -> Network(reticulum) { note = it; refresh() }
+                0 -> Overview(status, reticulum) { note = it; refresh() }
+                1 -> Announces(status) { note = it; refresh() }
                 else -> SettingsView { note = it; refresh() }
             }
         }
@@ -133,22 +153,12 @@ fun App() {
 }
 
 @Composable
-fun Overview(s: JSONObject, said: (String) -> Unit) {
+fun Overview(s: JSONObject, reticulum: Boolean, said: (String) -> Unit) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    var heard by remember { mutableStateOf(JSONArray()) }
-    var heardError by remember { mutableStateOf("") }
     var newLibrary by remember { mutableStateOf(false) }
+    var joinLink by remember { mutableStateOf(false) }
     if (newLibrary) NewLibraryDialog(said) { newLibrary = false }
-    LaunchedEffect(s) {
-        val answer = core { Core.heard() }
-        if (answer.startsWith("[")) {
-            heard = JSONArray(answer)
-            heardError = ""
-        } else {
-            heardError = JSONObject(answer).optString("error", answer)
-        }
-    }
+    if (joinLink) JoinLinkDialog(said) { joinLink = false }
     LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
             Card(Modifier.fillMaxWidth()) {
@@ -167,6 +177,7 @@ fun Overview(s: JSONObject, said: (String) -> Unit) {
                         Text("Cache: ${human(u.optLong("cache"))} of ${human(u.optLong("cache_max"))}")
                         Text("Free on the phone: ${human(u.optLong("disk_available"))}")
                     }
+                    Reticulum(reticulum)
                     Row(Modifier.padding(top = 12.dp)) {
                         Button(onClick = { RetifsService.start(context); said("Starting retifs") }) { Text("Start") }
                         Spacer(Modifier.width(8.dp))
@@ -181,6 +192,7 @@ fun Overview(s: JSONObject, said: (String) -> Unit) {
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("Libraries", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                TextButton(onClick = { joinLink = true }) { Text("Join with link") }
                 IconButton(onClick = { newLibrary = true }) { Icon(Icons.Filled.Add, "New library") }
             }
         }
@@ -188,7 +200,25 @@ fun Overview(s: JSONObject, said: (String) -> Unit) {
             item { Text("None yet.", style = MaterialTheme.typography.bodySmall) }
         }
         items((0 until libraries.length()).map { libraries.getJSONObject(it) }) { l -> LibraryCard(l, said) }
-        item { Text("Heard on the network", style = MaterialTheme.typography.titleSmall) }
+    }
+}
+
+/** The public libraries announced on the network, to join. */
+@Composable
+fun Announces(s: JSONObject, said: (String) -> Unit) {
+    val scope = rememberCoroutineScope()
+    var heard by remember { mutableStateOf(JSONArray()) }
+    var heardError by remember { mutableStateOf("") }
+    LaunchedEffect(s) {
+        val answer = core { Core.heard() }
+        if (answer.startsWith("[")) {
+            heard = JSONArray(answer)
+            heardError = ""
+        } else {
+            heardError = JSONObject(answer).optString("error", answer)
+        }
+    }
+    LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         if (heardError.isNotEmpty()) {
             item { Text(heardError, style = MaterialTheme.typography.bodySmall) }
         } else if (heard.length() == 0) {
@@ -215,73 +245,27 @@ fun Overview(s: JSONObject, said: (String) -> Unit) {
     }
 }
 
+/**
+ * Reticulum on the phone is Prns's app (or another one with a shared
+ * instance): retifs only joins it. Its connections are set up there.
+ */
 @Composable
-fun Network(r: JSONObject, said: (String) -> Unit) {
-    val scope = rememberCoroutineScope()
+fun Reticulum(up: Boolean) {
     val context = LocalContext.current
-    // A change is written to Reticulum's settings, then Reticulum restarted to use it.
-    val changed = { error: String, done: String ->
-        if (error.isEmpty()) RetifsService.restartReticulum(context)
-        said(error.ifEmpty { done })
-    }
-    var adding by remember { mutableStateOf(false) }
-    val connections = r.optJSONArray("connections") ?: JSONArray()
-    Scaffold(floatingActionButton = {
-        FloatingActionButton(onClick = { adding = true }) { Icon(Icons.Filled.Add, "Add a connection") }
-    }) { inner ->
-        LazyColumn(Modifier.padding(inner).fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            item {
-                Text(
-                    if (r.optBoolean("running")) "Reticulum is running (transport ${r.optString("transport").take(12)}…)"
-                    else "Reticulum isn't running: ${r.optString("error")}",
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                Text("Out of the box it finds others on the same Wi-Fi; add a connection to a node you trust to reach further.", style = MaterialTheme.typography.bodySmall)
-            }
-            items((0 until connections.length()).map { connections.getJSONObject(it) }) { c ->
-                Card(Modifier.fillMaxWidth()) {
-                    Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text(c.optString("name"), style = MaterialTheme.typography.titleMedium)
-                            val state = if (c.optBoolean("up")) "connected · ↓ ${human(c.optLong("rx"))} ↑ ${human(c.optLong("tx"))}" else if (c.optBoolean("enabled")) "not connected" else "off"
-                            Text("${c.optString("kind")} · $state", style = MaterialTheme.typography.bodySmall)
-                        }
-                        Switch(checked = c.optBoolean("enabled"), onCheckedChange = { on ->
-                            scope.launch { changed(core { Core.setInterface(c.optString("name"), on) }, "Connection switched ${if (on) "on" else "off"}") }
-                        })
-                        IconButton(onClick = {
-                            scope.launch { changed(core { Core.removeInterface(c.optString("name")) }, "Connection removed") }
-                        }) { Icon(Icons.Filled.Delete, "Remove") }
-                    }
-                }
-            }
-        }
-    }
-    if (adding) {
-        var name by remember { mutableStateOf("") }
-        var host by remember { mutableStateOf("") }
-        var port by remember { mutableStateOf("4242") }
-        AlertDialog(
-            onDismissRequest = { adding = false },
-            title = { Text("Add a connection") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("A TCP connection to another Reticulum node: someone's you trust, or a public one. Everything retifs sends is encrypted end to end either way.", style = MaterialTheme.typography.bodySmall)
-                    OutlinedTextField(name, { name = it }, label = { Text("Name") }, singleLine = true)
-                    OutlinedTextField(host, { host = it }, label = { Text("Host") }, singleLine = true)
-                    OutlinedTextField(port, { port = it }, label = { Text("Port") }, singleLine = true)
-                }
+    val prns = context.packageManager.getLaunchIntentForPackage(RetifsService.PRNS_APP)
+    Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            when {
+                up -> "Reticulum is running"
+                prns != null -> "Reticulum isn't running: start it in Prns"
+                else -> "Reticulum isn't running: install Prns"
             },
-            confirmButton = {
-                TextButton(onClick = {
-                    adding = false
-                    val p = port.trim().toIntOrNull() ?: 4242
-                    val n = name.trim().ifEmpty { host.trim() }
-                    scope.launch { changed(core { Core.addTcp(n, host.trim(), p) }, "Connection added; Reticulum restarted") }
-                }, enabled = host.isNotBlank()) { Text("Add") }
-            },
-            dismissButton = { TextButton(onClick = { adding = false }) { Text("Cancel") } },
+            Modifier.weight(1f),
+            style = MaterialTheme.typography.bodyMedium,
         )
+        if (prns != null) {
+            TextButton(onClick = { context.startActivity(prns) }) { Text("Open Prns") }
+        }
     }
 }
 

@@ -29,6 +29,7 @@ const ID_MEMBERS: i32 = 133;
 const ID_INVITE: i32 = 134;
 const ID_COPY: i32 = 135;
 const ID_JOIN: i32 = 136;
+const ID_LINK: i32 = 137;
 // The right-click menu.
 const IDM_FAVORITE: u32 = 40;
 const IDM_KEEP: u32 = 41;
@@ -37,6 +38,8 @@ const IDM_MEMBERS: u32 = 43;
 const IDM_INVITE: u32 = 44;
 const IDM_ANNOUNCE: u32 = 45;
 const IDM_LEAVE: u32 = 46;
+const IDM_PURPOSE: u32 = 47;
+const IDM_DELETE: u32 = 48;
 // The members window.
 const ID_M_LIST: i32 = 400;
 const ID_M_INVITES: i32 = 401;
@@ -57,6 +60,16 @@ const ID_N_NAME: i32 = 600;
 const ID_N_PUBLIC: i32 = 601;
 const ID_N_OK: i32 = 602;
 const ID_N_CANCEL: i32 = 603;
+/// The first of the purposes' check boxes (one per PURPOSES), new and "Use for…" windows alike.
+const ID_FOR: i32 = 610;
+// The "Use for…" window.
+const ID_P_OK: i32 = 620;
+const ID_P_CANCEL: i32 = 621;
+// The join-with-a-link window.
+const ID_J_LINK: i32 = 700;
+const ID_J_NAME: i32 = 701;
+const ID_J_OK: i32 = 702;
+const ID_J_CANCEL: i32 = 703;
 
 const WM_MEMBERS: u32 = WM_APP + 10;
 const WM_INVITED: u32 = WM_APP + 11;
@@ -64,6 +77,8 @@ const WM_INVITED: u32 = WM_APP + 11;
 const MEMBERS_CLASS: PCWSTR = w!("retifs-desktop-members");
 const INVITE_CLASS: PCWSTR = w!("retifs-desktop-invite");
 const NEW_CLASS: PCWSTR = w!("retifs-desktop-new-library");
+const LINK_CLASS: PCWSTR = w!("retifs-desktop-join-link");
+const PURPOSE_CLASS: PCWSTR = w!("retifs-desktop-purpose");
 
 /// The pages' controls.
 #[derive(Clone)]
@@ -94,12 +109,16 @@ thread_local! {
 /// What the members window's thread found, for it to show.
 static MEMBERS_FOUND: Mutex<Option<(Result<Value, String>, Result<Vec<InviteInfo>, String>)>> = Mutex::new(None);
 static INVITE_LINK: Mutex<String> = Mutex::new(String::new());
+/// The library the "Use for…" window is for.
+static PURPOSE_NS: Mutex<String> = Mutex::new(String::new());
 
 pub unsafe fn register(class: &WNDCLASSW) {
     for (name, proc_) in [
         (MEMBERS_CLASS, members_proc as unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT),
         (INVITE_CLASS, invite_proc),
         (NEW_CLASS, new_proc),
+        (LINK_CLASS, link_proc),
+        (PURPOSE_CLASS, purpose_proc),
     ] {
         let c = WNDCLASSW { lpfnWndProc: Some(proc_), lpszClassName: name, ..*class };
         RegisterClassW(&c);
@@ -137,9 +156,15 @@ unsafe fn report(parent: HWND, id: i32, font: windows::Win32::Graphics::Gdi::HFO
 pub unsafe fn build(hwnd: HWND, font: windows::Win32::Graphics::Gdi::HFONT) -> Pages {
     FONT.with(|f| *f.borrow_mut() = font);
     let libs = report(hwnd, ID_LIBS, font);
-    columns(libs, &[("Library", 170), ("Shared", 80), ("You may", 160), ("Records", 80), ("Peers", 60), ("On this device", 170)]);
+    columns(libs, &[("Library", 170), ("For", 130), ("Shared", 80), ("You may", 160), ("Records", 80), ("Peers", 60), ("On this device", 170)]);
     let button = |text: &str, id: i32| child(hwnd, WC_BUTTONW, text, WS_TABSTOP | WINDOW_STYLE(BS_PUSHBUTTON as u32), id, font);
-    let libs_buttons = vec![button("New library…", ID_NEW), button("Members…", ID_MEMBERS), button("Invite…", ID_INVITE), button("Copy link", ID_COPY)];
+    let libs_buttons = vec![
+        button("New library…", ID_NEW),
+        button("Join with link…", ID_LINK),
+        button("Members…", ID_MEMBERS),
+        button("Invite…", ID_INVITE),
+        button("Copy link", ID_COPY),
+    ];
     let heard_note = child(hwnd, WC_STATICW, "Public libraries others announce. Joining fetches only what you look at.", WINDOW_STYLE(0), 0, font);
     let heard = report(hwnd, ID_HEARD, font);
     columns(heard, &[("Library", 160), ("About", 260), ("Holds", 150), ("Hops", 50), ("Here", 120)]);
@@ -201,11 +226,13 @@ pub unsafe fn show(p: &Pages, libs: &[Value], heard: &[HeardLibrary]) {
         } else {
             "content as needed".to_string()
         };
+        let purposes: Vec<&str> = j["for"].as_array().into_iter().flatten().filter_map(|w| w.as_str()).collect();
         set_row(
             p.libs,
             i,
             &[
                 name,
+                if purposes.is_empty() { "generic".to_string() } else { purposes.join(", ") },
                 if j["public"].as_bool().unwrap_or(false) { "public" } else { "private" }.to_string(),
                 format!("{}{}", j["access"].as_str().unwrap_or(""), if j["own"].as_bool().unwrap_or(false) { " · yours" } else { "" }),
                 number(j["records"].as_u64().unwrap_or(0)),
@@ -276,6 +303,7 @@ pub unsafe fn command(p: &Pages, hwnd: HWND, id: i32) -> bool {
     let picked = selected_lib(p);
     match id {
         ID_NEW => ask_new(hwnd),
+        ID_LINK => ask_link(hwnd),
         ID_MEMBERS | ID_INVITE | ID_COPY => {
             let Some(ns) = picked else {
                 note("Pick a library first");
@@ -322,7 +350,11 @@ pub unsafe fn context(p: &Pages, hwnd: HWND) {
         add(IDM_ANNOUNCE, if flag(&ns, "announced") { "Stop announcing" } else { "Announce on the network…" }, true);
     }
     let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
-    add(IDM_LEAVE, "Leave library…", !me && !own);
+    add(IDM_PURPOSE, "Use for…", lib(&ns).is_some_and(|l| l.json["access"].as_str().unwrap_or("").contains("write")));
+    add(IDM_LEAVE, "Leave library…", !me);
+    if !me && may_invite(&ns) {
+        add(IDM_DELETE, "Delete everywhere…", true);
+    }
     let mut pt = POINT::default();
     let _ = GetCursorPos(&mut pt);
     let cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, pt.x, pt.y, 0, hwnd, None);
@@ -365,10 +397,22 @@ unsafe fn act(hwnd: HWND, ns: &str, what: u32) {
             }
             spawn(if on { "Announcing" } else { "Stopping announcing" }, move || Daemon::new().announce(&ns, on));
         }
+        IDM_PURPOSE => ask_purpose(hwnd, &ns),
         IDM_LEAVE => {
-            let q = wide(&format!("Leave {ns}?\n\nIts records go from this device. Others who have it keep theirs; you can join it again."));
+            let what = if flag(&ns, "own") { retifs_desktop_core::LEAVE_OWN } else { retifs_desktop_core::LEAVE };
+            let q = wide(&format!("Leave {ns}?\n\n{what}"));
             if MessageBoxW(hwnd, &q, w!("retifs"), MB_YESNO | MB_ICONWARNING) == IDYES {
                 spawn("Leaving", move || Daemon::new().leave(&ns));
+            }
+        }
+        IDM_DELETE => {
+            // Asked twice: it can't be undone, and it reaches everyone's devices.
+            let q = wide(&format!("Delete {ns} everywhere?\n\n{}", retifs_desktop_core::DELETE));
+            let again = wide(&format!("Delete {ns} on every member's device, for good?"));
+            if MessageBoxW(hwnd, &q, w!("retifs"), MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) == IDYES
+                && MessageBoxW(hwnd, &again, w!("retifs"), MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) == IDYES
+            {
+                spawn("Deleting", move || Daemon::new().delete_library(&ns));
             }
         }
         _ => {}
@@ -634,7 +678,7 @@ unsafe extern "system" fn invite_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
 // The new library window.
 
 unsafe fn ask_new(owner: HWND) {
-    let Some(h) = popup(owner, NEW_CLASS, "New library", 440, 220) else { return };
+    let Some(h) = popup(owner, NEW_CLASS, "New library", 440, 330) else { return };
     let s = |v| scale(owner, v);
     let f = font();
     let l = child(h, WC_STATICW, "Name", WS_VISIBLE, 0, f);
@@ -645,11 +689,79 @@ unsafe fn ask_new(owner: HWND) {
     let _ = MoveWindow(public, s(14), s(52), s(400), s(24), true);
     let hint = child(h, WC_STATICW, "A private one is shared from its menu (right-click): members and invitations.", WS_VISIBLE, 0, f);
     let _ = MoveWindow(hint, s(14), s(84), s(400), s(36), true);
+    let bottom = purpose_checks(h, owner, s(124), &[]);
     let ok = child(h, WC_BUTTONW, "Create", WS_VISIBLE | WS_TABSTOP | WINDOW_STYLE(BS_DEFPUSHBUTTON as u32), ID_N_OK, f);
     let cancel = child(h, WC_BUTTONW, "Cancel", WS_VISIBLE | WS_TABSTOP | WINDOW_STYLE(BS_PUSHBUTTON as u32), ID_N_CANCEL, f);
-    let _ = MoveWindow(ok, s(220), s(136), s(90), s(28), true);
-    let _ = MoveWindow(cancel, s(318), s(136), s(90), s(28), true);
+    let _ = MoveWindow(ok, s(220), bottom + s(8), s(90), s(28), true);
+    let _ = MoveWindow(cancel, s(318), bottom + s(8), s(90), s(28), true);
     let _ = windows::Win32::UI::Input::KeyboardAndMouse::SetFocus(name);
+}
+
+/// What a library is for (ADR-0032): a check box per purpose from `top`, the
+/// ones in `checked` ticked. Returns where they end.
+unsafe fn purpose_checks(h: HWND, owner: HWND, top: i32, checked: &[String]) -> i32 {
+    let s = |v| scale(owner, v);
+    let f = font();
+    let l = child(h, WC_STATICW, "What it's for (none: a generic library)", WS_VISIBLE, 0, f);
+    let _ = MoveWindow(l, s(14), top, s(400), s(22), true);
+    let mut y = top + s(26);
+    for (i, (word, label)) in retifs_desktop_core::PURPOSES.iter().enumerate() {
+        let b = child(h, WC_BUTTONW, label, WS_VISIBLE | WS_TABSTOP | WINDOW_STYLE(BS_AUTOCHECKBOX as u32), ID_FOR + i as i32, f);
+        let _ = MoveWindow(b, s(24) + (i as i32 % 2) * s(190), y, s(180), s(24), true);
+        if checked.iter().any(|c| c == word) {
+            SendMessageW(b, BM_SETCHECK, WPARAM(1), LPARAM(0));
+        }
+        if i % 2 == 1 {
+            y += s(26);
+        }
+    }
+    y + s(8)
+}
+
+/// The purposes ticked in window `h`.
+unsafe fn purposes_ticked(h: HWND) -> Vec<String> {
+    retifs_desktop_core::PURPOSES
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| SendMessageW(GetDlgItem(h, ID_FOR + *i as i32).unwrap_or_default(), BM_GETCHECK, WPARAM(0), LPARAM(0)).0 == 1)
+        .map(|(_, (w, _))| w.to_string())
+        .collect()
+}
+
+// The "Use for…" window.
+
+unsafe fn ask_purpose(owner: HWND, ns: &str) {
+    let current = lib(ns).map(|l| l.json["for"].as_array().into_iter().flatten().filter_map(|w| w.as_str().map(String::from)).collect::<Vec<_>>()).unwrap_or_default();
+    let Some(h) = popup(owner, PURPOSE_CLASS, &format!("{ns} is for"), 440, 210) else { return };
+    *PURPOSE_NS.lock().unwrap() = ns.to_string();
+    let s = |v| scale(owner, v);
+    let f = font();
+    let bottom = purpose_checks(h, owner, s(14), &current);
+    let ok = child(h, WC_BUTTONW, "Save", WS_VISIBLE | WS_TABSTOP | WINDOW_STYLE(BS_DEFPUSHBUTTON as u32), ID_P_OK, f);
+    let cancel = child(h, WC_BUTTONW, "Cancel", WS_VISIBLE | WS_TABSTOP | WINDOW_STYLE(BS_PUSHBUTTON as u32), ID_P_CANCEL, f);
+    let _ = MoveWindow(ok, s(220), bottom + s(8), s(90), s(28), true);
+    let _ = MoveWindow(cancel, s(318), bottom + s(8), s(90), s(28), true);
+}
+
+unsafe extern "system" fn purpose_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    match msg {
+        WM_COMMAND => {
+            match (wparam.0 & 0xffff) as i32 {
+                ID_P_OK => {
+                    let purposes = purposes_ticked(hwnd);
+                    let ns = PURPOSE_NS.lock().unwrap().clone();
+                    let _ = DestroyWindow(hwnd);
+                    spawn("Saving what it's for", move || Daemon::new().set_purpose(&ns, &purposes));
+                }
+                ID_P_CANCEL => {
+                    let _ = DestroyWindow(hwnd);
+                }
+                _ => {}
+            }
+            LRESULT(0)
+        }
+        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+    }
 }
 
 unsafe extern "system" fn new_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -662,10 +774,14 @@ unsafe extern "system" fn new_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                         return LRESULT(0);
                     }
                     let public = SendMessageW(GetDlgItem(hwnd, ID_N_PUBLIC).unwrap_or_default(), BM_GETCHECK, WPARAM(0), LPARAM(0)).0 == 1;
+                    let purposes = purposes_ticked(hwnd);
                     let _ = DestroyWindow(hwnd);
                     spawn("Making the library", move || {
                         let d = Daemon::new();
                         d.create_namespace(&name)?;
+                        if !purposes.is_empty() {
+                            d.set_purpose(&name, &purposes)?;
+                        }
                         if public {
                             d.announce(&name, true)?;
                         }
@@ -673,6 +789,58 @@ unsafe extern "system" fn new_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                     });
                 }
                 ID_N_CANCEL => {
+                    let _ = DestroyWindow(hwnd);
+                }
+                _ => {}
+            }
+            LRESULT(0)
+        }
+        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+    }
+}
+
+// The join-with-a-link window: an invitation or a library's `retifs:` link.
+
+unsafe fn ask_link(owner: HWND) {
+    let Some(h) = popup(owner, LINK_CLASS, "Join a library", 480, 240) else { return };
+    let s = |v| scale(owner, v);
+    let f = font();
+    let hint = child(h, WC_STATICW, "Paste the invitation or link a member gave you.", WS_VISIBLE, 0, f);
+    let _ = MoveWindow(hint, s(14), s(14), s(440), s(22), true);
+    let l = child(h, WC_STATICW, "Link", WS_VISIBLE, 0, f);
+    let _ = MoveWindow(l, s(14), s(48), s(80), s(24), true);
+    let link = child(h, WC_EDITW, "", WS_VISIBLE | WS_BORDER | WS_TABSTOP | WINDOW_STYLE(ES_AUTOHSCROLL as u32), ID_J_LINK, f);
+    let _ = MoveWindow(link, s(100), s(44), s(350), s(26), true);
+    let l = child(h, WC_STATICW, "Name here", WS_VISIBLE, 0, f);
+    let _ = MoveWindow(l, s(14), s(84), s(80), s(24), true);
+    let name = child(h, WC_EDITW, "", WS_VISIBLE | WS_BORDER | WS_TABSTOP | WINDOW_STYLE(ES_AUTOHSCROLL as u32), ID_J_NAME, f);
+    let _ = MoveWindow(name, s(100), s(80), s(350), s(26), true);
+    let note = child(h, WC_STATICW, "Leave the name empty for the one the link suggests.", WS_VISIBLE, 0, f);
+    let _ = MoveWindow(note, s(100), s(110), s(350), s(22), true);
+    let ok = child(h, WC_BUTTONW, "Join", WS_VISIBLE | WS_TABSTOP | WINDOW_STYLE(BS_DEFPUSHBUTTON as u32), ID_J_OK, f);
+    let cancel = child(h, WC_BUTTONW, "Cancel", WS_VISIBLE | WS_TABSTOP | WINDOW_STYLE(BS_PUSHBUTTON as u32), ID_J_CANCEL, f);
+    let _ = MoveWindow(ok, s(262), s(152), s(90), s(28), true);
+    let _ = MoveWindow(cancel, s(360), s(152), s(90), s(28), true);
+    let _ = windows::Win32::UI::Input::KeyboardAndMouse::SetFocus(link);
+}
+
+unsafe extern "system" fn link_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    match msg {
+        WM_COMMAND => {
+            match (wparam.0 & 0xffff) as i32 {
+                ID_J_OK => {
+                    let link = text_of(GetDlgItem(hwnd, ID_J_LINK).unwrap_or_default()).trim().to_string();
+                    let typed = text_of(GetDlgItem(hwnd, ID_J_NAME).unwrap_or_default()).trim().to_string();
+                    if link.is_empty() {
+                        return LRESULT(0);
+                    }
+                    let _ = DestroyWindow(hwnd);
+                    spawn("Joining the library", move || {
+                        let name = if typed.is_empty() { Daemon::link_name(&link)? } else { typed };
+                        Daemon::new().open_link(&link, &name)
+                    });
+                }
+                ID_J_CANCEL => {
                     let _ = DestroyWindow(hwnd);
                 }
                 _ => {}
