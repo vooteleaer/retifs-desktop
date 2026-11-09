@@ -230,6 +230,16 @@ pub fn run() {
                     note(did.join("; "));
                 }
                 poke();
+                // From then on: retifsd kept running, and restarted after Reticulum was.
+                let mut away = 0;
+                loop {
+                    std::thread::sleep(std::time::Duration::from_secs(10));
+                    let did = device::keep(&mut away);
+                    if !did.is_empty() {
+                        note(did.join("; "));
+                        poke();
+                    }
+                }
             });
             if show {
                 let _ = ShowWindow(hwnd, SW_SHOWNORMAL);

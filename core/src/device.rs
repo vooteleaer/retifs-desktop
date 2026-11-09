@@ -463,6 +463,30 @@ pub fn supervise() -> Vec<String> {
     did
 }
 
+/// Keeps retifs running while the utility does (Windows), as the Android
+/// app does: retifsd started again if it stopped, and restarted when
+/// Reticulum is back after being away (retifsd doesn't attach to a new
+/// shared instance by itself). `away`: how many checks running Reticulum
+/// wasn't up (one missed check is a busy machine). Says what it did.
+#[cfg(windows)]
+pub fn keep(away: &mut u32) -> Vec<String> {
+    let mut did = Vec::new();
+    let up = shared_instance_up();
+    if up && *away >= 2 && running("retifsd.exe") {
+        match service("retifsd", "restart") {
+            Ok(()) => did.push("Reticulum is back: restarted retifsd".to_string()),
+            Err(e) => did.push(format!("retifsd: {e}")),
+        }
+    } else if up && !running("retifsd.exe") {
+        match service("retifsd", "start") {
+            Ok(()) => did.push("retifsd had stopped: started it again".to_string()),
+            Err(e) => did.push(format!("retifsd: {e}")),
+        }
+    }
+    *away = if up { 0 } else { *away + 1 };
+    did
+}
+
 /// The settings the utility offers, of `retifs.toml`'s: (section, key, what it is).
 pub const SETTINGS: [(&str, &str, &str); 7] = [
     ("node", "device", "This device's name"),
