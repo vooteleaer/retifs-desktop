@@ -303,7 +303,7 @@ pub unsafe fn command(p: &Pages, hwnd: HWND, id: i32) -> bool {
     let picked = selected_lib(p);
     match id {
         ID_NEW => ask_new(hwnd),
-        ID_LINK => ask_link(hwnd),
+        ID_LINK => ask_link(hwnd, ""),
         ID_MEMBERS | ID_INVITE | ID_COPY => {
             let Some(ns) = picked else {
                 note("Pick a library first");
@@ -801,15 +801,22 @@ unsafe extern "system" fn new_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
 
 // The join-with-a-link window: an invitation or a library's `retifs:` link.
 
-unsafe fn ask_link(owner: HWND) {
+/// A `retifs:` link opened from elsewhere (a browser, a mail): the same
+/// window with the link in it. Nothing is joined until the user says so.
+pub unsafe fn open_link(owner: HWND, link: &str) {
+    ask_link(owner, link);
+}
+
+unsafe fn ask_link(owner: HWND, given: &str) {
     let Some(h) = popup(owner, LINK_CLASS, "Join a library", 480, 240) else { return };
     let s = |v| scale(owner, v);
     let f = font();
-    let hint = child(h, WC_STATICW, "Paste the invitation or link a member gave you.", WS_VISIBLE, 0, f);
+    let says = if given.is_empty() { "Paste the invitation or link a member gave you." } else { "A link was opened: join the library it names?" };
+    let hint = child(h, WC_STATICW, says, WS_VISIBLE, 0, f);
     let _ = MoveWindow(hint, s(14), s(14), s(440), s(22), true);
     let l = child(h, WC_STATICW, "Link", WS_VISIBLE, 0, f);
     let _ = MoveWindow(l, s(14), s(48), s(80), s(24), true);
-    let link = child(h, WC_EDITW, "", WS_VISIBLE | WS_BORDER | WS_TABSTOP | WINDOW_STYLE(ES_AUTOHSCROLL as u32), ID_J_LINK, f);
+    let link = child(h, WC_EDITW, given, WS_VISIBLE | WS_BORDER | WS_TABSTOP | WINDOW_STYLE(ES_AUTOHSCROLL as u32), ID_J_LINK, f);
     let _ = MoveWindow(link, s(100), s(44), s(350), s(26), true);
     let l = child(h, WC_STATICW, "Name here", WS_VISIBLE, 0, f);
     let _ = MoveWindow(l, s(14), s(84), s(80), s(24), true);

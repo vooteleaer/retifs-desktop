@@ -14,6 +14,7 @@ use retifs_desktop_core::{human, Daemon, Status};
 use windows::core::{w, HSTRING, PCWSTR, PWSTR};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
+use windows::Win32::System::DataExchange::COPYDATASTRUCT;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::Storage::Xps::{PrintWindow, PRINT_WINDOW_FLAGS};
 use windows::Win32::System::Threading::CreateMutexW;
@@ -27,6 +28,8 @@ const CLASS: PCWSTR = w!("retifs-desktop");
 const ADD_CLASS: PCWSTR = w!("retifs-desktop-add");
 const WM_TRAY: u32 = WM_APP + 1;
 const WM_REFRESHED: u32 = WM_APP + 2;
+/// WM_COPYDATA's tag for a `retifs:` link handed to the running utility.
+const COPY_LINK: usize = 0x7265_7466;
 const WM_NOTE: u32 = WM_APP + 3;
 
 const ID_TABS: i32 = 100;
@@ -176,8 +179,12 @@ pub fn run() {
     let autostart = std::env::args().any(|a| a == "--autostart");
     // --show: the window too (the installer's first start).
     let show = std::env::args().any(|a| a == "--show");
+    // A `retifs:` link opened elsewhere (the URL protocol the installer
+    // registers runs `--open "%1"`).
+    let link = std::env::args().find(|a| a.starts_with("retifs:"));
     unsafe {
-        // One instance: started again, the running one shows its window.
+        // One instance: started again, the running one shows its window (and
+        // gets the link, if one was opened).
         // (Not for snapshots: a test copy mustn't bring the user's to the front.)
         let snapshotting = std::env::var_os("RETIFS_DESKTOP_SNAPSHOT").is_some();
         let _single = CreateMutexW(None, true, w!("Local\\retifs-desktop"));
@@ -185,6 +192,11 @@ pub fn run() {
             if let Ok(h) = FindWindowW(CLASS, None) {
                 let _ = ShowWindow(h, SW_SHOWNORMAL);
                 let _ = SetForegroundWindow(h);
+                if let Some(link) = &link {
+                    let text: Vec<u16> = link.encode_utf16().collect();
+                    let data = COPYDATASTRUCT { dwData: COPY_LINK, cbData: (text.len() * 2) as u32, lpData: text.as_ptr() as *mut _ };
+                    SendMessageW(h, WM_COPYDATA, WPARAM(0), LPARAM(&data as *const _ as isize));
+                }
             }
             return;
         }
@@ -222,6 +234,10 @@ pub fn run() {
         };
         MAIN.store(hwnd.0 as isize, Ordering::SeqCst);
         build(hwnd, icons);
+        if let Some(link) = &link {
+            open(hwnd);
+            crate::libraries::open_link(hwnd, link);
+        }
         // At login: retifs once Reticulum (Prns's) is up; the window stays hidden.
         if autostart {
             std::thread::spawn(|| {
@@ -790,6 +806,19 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_REFRESHED => {
             refreshed();
             LRESULT(0)
+        }
+        // A link another start of the utility was given.
+        WM_COPYDATA => {
+            let data = &*(lparam.0 as *const COPYDATASTRUCT);
+            if data.dwData == COPY_LINK && !data.lpData.is_null() {
+                let text = std::slice::from_raw_parts(data.lpData as *const u16, data.cbData as usize / 2);
+                let link = String::from_utf16_lossy(text);
+                if link.starts_with("retifs:") {
+                    open(hwnd);
+                    crate::libraries::open_link(hwnd, &link);
+                }
+            }
+            LRESULT(1)
         }
         WM_TIMER => {
             if let Some(path) = SNAPSHOT_PATH.with(|p| p.borrow().clone()) {
