@@ -18,7 +18,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/.." && pwd)
 APP=$HERE/build/retifs
 STAGE=$HERE/build/package
-VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' "$ROOT/Cargo.toml" | head -1)-18
+VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' "$ROOT/Cargo.toml" | head -1)-19
 ARCH=x86_64
 
 for f in retifs lib/libretifs_desktop.so bin/retifsd bin/retifs add-ons/retifs-haikufs; do
@@ -45,9 +45,14 @@ ln -s ../../../../apps/retifs/retifs "$STAGE/data/deskbar/menu/Applications/reti
 } > "$STAGE/data/user_launch/retifs"
 cat >> "$STAGE/data/user_launch/retifs" <<'EOF'
 
-# The status icon in the Deskbar's tray (added once; the Deskbar keeps it).
-job x-vnd.retifs-deskbar {
-	launch /boot/system/apps/retifs/retifs --deskbar
+# The status icon in the Deskbar's tray (added once; the Deskbar keeps it):
+# with the desktop, once the Deskbar runs. At top level it started before
+# app_server, and a login sometimes never got its desktop (2026-11-09).
+target desktop {
+	job x-vnd.retifs-deskbar {
+		launch /boot/system/apps/retifs/retifs --deskbar
+		requires x-vnd.Be-TSKB
+	}
 }
 EOF
 
