@@ -126,6 +126,8 @@ struct App {
     find: Rc<find::Find>,
     device: Rc<device::DevicePage>,
     retifs_up: std::cell::Cell<bool>,
+    /// While retifsd starts: what it's doing.
+    starting: std::cell::RefCell<Option<String>>,
     node: RefCell<Option<String>>,
     saved: RefCell<Vec<(SavedQuery, Vec<String>, usize)>>,
     views: RefCell<Vec<NsView>>,
@@ -235,6 +237,7 @@ fn build(app: &adw::Application, hidden: bool) {
         find: finder.clone(),
         device: device_page.clone(),
         retifs_up: std::cell::Cell::new(false),
+        starting: std::cell::RefCell::new(None),
         node: RefCell::new(None),
         saved: RefCell::new(Vec::new()),
         views: RefCell::new(Vec::new()),
@@ -327,7 +330,9 @@ fn build(app: &adw::Application, hidden: bool) {
             }, move |(s, missing): (Status, bool)| {
                 me2.retifs_up.set(s.up);
                 *me2.node.borrow_mut() = s.node.clone();
-                banner.set_title(if missing { retifs_desktop_core::device::NOT_INSTALLED } else { "retifsd is not running" });
+                *me2.starting.borrow_mut() = s.starting_text();
+                let starting = s.starting_text().map(|step| format!("retifs is starting: {step}…"));
+                banner.set_title(if missing { retifs_desktop_core::device::NOT_INSTALLED } else { starting.as_deref().unwrap_or("retifsd is not running") });
                 banner.set_revealed(!s.up);
                 me2.title.set_subtitle(&match &s.node {
                     Some(n) => format!("node {}…", &n[..8.min(n.len())]),
@@ -420,6 +425,7 @@ fn start_tray(app: &adw::Application, window: &adw::ApplicationWindow, me: &Rc<A
             tray.show(tray::TrayState {
                 retifs_up: me2.retifs_up.get(),
                 node: me2.node.borrow().clone(),
+                starting: me2.starting.borrow().clone(),
                 reticulum_up: r.running,
                 links_up: outward.iter().filter(|i| i.up).count(),
                 links: outward.len(),
@@ -466,6 +472,10 @@ fn show_status(o: &Overview, s: &Status) {
         Some(n) => {
             o.node.set_title(n);
             o.node.set_subtitle(&format!("{} chunks · store {}", s.chunks, s.store));
+        }
+        None if s.starting.is_some() => {
+            o.node.set_title("Starting");
+            o.node.set_subtitle(&format!("{}… ({})", s.starting_text().unwrap_or_default(), s.store));
         }
         None => {
             o.node.set_title("Not connected");

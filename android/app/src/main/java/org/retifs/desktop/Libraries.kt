@@ -92,6 +92,10 @@ fun LibraryCard(l: JSONObject, said: (String) -> Unit) {
                         else -> "content fetched as needed"
                     }
                     Text("${grouped(l.optLong("records"))} record(s) · ${l.optInt("peers")} peer(s) · $here", style = MaterialTheme.typography.bodySmall)
+                    // When another node holding it last answered a sync.
+                    l.optString("seen").takeIf { it.isNotEmpty() }?.let {
+                        Text(it.replaceFirstChar { c -> c.uppercase() }, style = MaterialTheme.typography.bodySmall)
+                    }
                     Text(if (purposes.isEmpty()) "Generic" else "For " + purposes.joinToString(", "), style = MaterialTheme.typography.bodySmall)
                 }
                 IconButton(onClick = { menu = true }) { Icon(Icons.Filled.MoreVert, "What can be done with it") }

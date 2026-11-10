@@ -527,14 +527,7 @@ pub(crate) unsafe fn text_of(h: HWND) -> String {
 }
 
 fn tray_state(s: &Snapshot) -> TrayState {
-    let outward: Vec<_> = s.reticulum.interfaces.iter().filter(|i| !i.is_local()).collect();
-    TrayState {
-        retifs_up: s.status.up,
-        node: s.status.node.clone(),
-        reticulum_up: s.reticulum.running,
-        links_up: outward.iter().filter(|i| i.up).count(),
-        links: outward.len(),
-    }
+    TrayState::of(&s.status, &s.reticulum)
 }
 
 unsafe fn tray_data(hwnd: HWND, icon: HICON, tip: &str) -> NOTIFYICONDATAW {
@@ -568,7 +561,10 @@ unsafe fn refreshed() {
         let st = &s.status;
         let mut lines = vec![match &st.node {
             Some(n) if st.up => format!("retifs is running.\r\nNode {n}"),
-            _ => format!("retifs isn't running ({}).", st.error.clone().unwrap_or_default()),
+            _ => match st.starting_text() {
+                Some(step) => format!("retifs is starting: {step}…"),
+                None => format!("retifs isn't running ({}).", st.error.clone().unwrap_or_default()),
+            },
         }];
         lines.push(format!("Store: {}", st.store));
         if let Some(us) = &st.usage {

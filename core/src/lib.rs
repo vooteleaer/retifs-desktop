@@ -82,6 +82,19 @@ pub struct Status {
     pub chunks: u64,
     pub usage: Option<StoreUsage>,
     pub error: Option<String>,
+    /// While retifsd starts (not answering yet): the step it's at.
+    pub starting: Option<libretifs::Starting>,
+}
+
+impl Status {
+    /// The starting step in words, with its progress when known:
+    /// "checking the store after an unclean stop, 42%".
+    pub fn starting_text(&self) -> Option<String> {
+        self.starting.as_ref().map(|s| match s.progress {
+            Some(p) => format!("{}, {}%", s.step, (p * 100.0).round() as u32),
+            None => s.step.clone(),
+        })
+    }
 }
 
 /// What a library may be for (ADR-0032), as the utilities offer it: (word,
@@ -98,6 +111,28 @@ pub const DELETE: &str = "Every record goes, on every member's device: each lets
 /// The store the local daemon owns (`$RETIFS_STORE`, else the platform default).
 pub fn default_store() -> PathBuf {
     libretifs::default_store_dir()
+}
+
+/// When a library's peers were last seen, in words, for its card or row:
+/// "peers seen 5 min ago", "only on this device", "peers not seen yet".
+pub fn seen_text(last_seen_ms: Option<u64>, peers: usize) -> String {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+    match last_seen_ms {
+        Some(ms) => format!("peers seen {}", ago(now.saturating_sub(ms) / 1000)),
+        None if peers == 0 => "only on this device".into(),
+        None => "peers not seen yet".into(),
+    }
+}
+
+/// `secs` ago in words: "just now", "5 min ago", "3 h ago", "2 days ago".
+pub fn ago(secs: u64) -> String {
+    match secs {
+        0..60 => "just now".into(),
+        60..3600 => format!("{} min ago", secs / 60),
+        3600..86_400 => format!("{} h ago", secs / 3600),
+        _ if secs < 2 * 86_400 => "1 day ago".into(),
+        _ => format!("{} days ago", secs / 86_400),
+    }
 }
 
 /// Human-readable sizes (binary units).
@@ -140,13 +175,14 @@ impl Daemon {
 
     pub fn status(&self) -> Status {
         let store = self.store.display().to_string();
+        let down = |error: String| Status { store: store.clone(), error: Some(error), starting: libretifs::starting(&self.store), ..Default::default() };
         let mut c = match self.client() {
             Ok(c) => c,
-            Err(e) => return Status { store, error: Some(e), ..Default::default() },
+            Err(e) => return down(e),
         };
         match self.rt.block_on(c.ping()) {
-            Ok((node, chunks, usage)) => Status { up: true, store, node: Some(node), chunks, usage, error: None },
-            Err(e) => Status { store, error: Some(e.to_string()), ..Default::default() },
+            Ok((node, chunks, usage)) => Status { up: true, store, node: Some(node), chunks, usage, error: None, starting: None },
+            Err(e) => down(e.to_string()),
         }
     }
 
@@ -312,6 +348,7 @@ impl Daemon {
                 j["favorite"] = favorite.into();
                 j["coming"] = v.coming().into();
                 j["for"] = self.purpose(&v.name).unwrap_or_default().into();
+                j["seen"] = seen_text(v.last_seen_ms, v.peers).into();
                 (v.name == saved::ME, !favorite, v.name.to_lowercase(), j)
             })
             .collect();

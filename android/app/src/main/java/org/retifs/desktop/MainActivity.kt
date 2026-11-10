@@ -26,6 +26,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -139,7 +140,8 @@ fun App() {
         while (true) {
             status = JSONObject(core { Core.status() })
             reticulum = core { Core.sharedInstanceUp() }
-            delay(5_000)
+            // Often while it starts, so its steps and progress move.
+            delay(if (status.optBoolean("up")) 5_000 else 1_000)
         }
     }
     val refresh = { tick++ }
@@ -177,13 +179,7 @@ fun Overview(s: JSONObject, reticulum: Boolean, said: (String) -> Unit) {
         item {
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp)) {
-                    if (s.optBoolean("up")) {
-                        Text("retifs is running", style = MaterialTheme.typography.titleMedium)
-                        Text("Node ${s.optString("node")}", style = MaterialTheme.typography.bodySmall)
-                    } else {
-                        Text("retifs isn't running yet", style = MaterialTheme.typography.titleMedium)
-                        Text(s.optString("error"), style = MaterialTheme.typography.bodySmall)
-                    }
+                    DaemonState(s, reticulum)
                     s.optJSONObject("usage")?.let { u ->
                         Spacer(Modifier.padding(4.dp))
                         Text("Own data: ${human(u.optLong("pinned"))} of ${human(u.optLong("store_limit"))}")
@@ -263,6 +259,55 @@ fun Announces(s: JSONObject, said: (String) -> Unit) {
  * Reticulum on the phone is Prns's app (or another one with a shared
  * instance): retifs only joins it. Its connections are set up there.
  */
+/**
+ * What retifs is doing: running, starting (the step retifsd is at, with a
+ * progress bar), waiting for Reticulum, stopped by itself (why), or not
+ * started. Never a bare "not running" while it starts.
+ */
+@Composable
+fun DaemonState(s: JSONObject, reticulum: Boolean) {
+    val starting = s.optJSONObject("starting")
+    val title = MaterialTheme.typography.titleMedium
+    val small = MaterialTheme.typography.bodySmall
+    when {
+        s.optBoolean("up") -> {
+            Text("retifs is running", style = title)
+            Text("Node ${s.optString("node")}", style = small)
+        }
+        starting != null || RetifsService.daemonAlive -> {
+            Text("retifs is starting…", style = title)
+            val progress = starting?.takeIf { !it.isNull("progress") }?.optDouble("progress")
+            Spacer(Modifier.padding(4.dp))
+            if (progress != null) {
+                LinearProgressIndicator(progress = { progress.toFloat() }, modifier = Modifier.fillMaxWidth())
+            } else {
+                LinearProgressIndicator(Modifier.fillMaxWidth())
+            }
+            Spacer(Modifier.padding(4.dp))
+            val step = starting?.optString("text")?.takeIf { it.isNotEmpty() } ?: "starting the daemon"
+            val since = starting?.optLong("since_ms") ?: 0L
+            val took = if (since > 0) (System.currentTimeMillis() - since) / 1000 else 0L
+            Text(step.replaceFirstChar { it.uppercase() } + if (took >= 10) " (${took / 60} min ${took % 60} s)" else "", style = small)
+            if (starting?.optString("step")?.startsWith("checking") == true) {
+                Text("retifs wasn't stopped cleanly last time, so it checks its store first. On a large store this takes a few minutes.", style = small)
+            }
+        }
+        RetifsService.waitingForReticulum || !reticulum -> {
+            Text("Waiting for Reticulum", style = title)
+            Text("retifs starts as soon as Reticulum is running.", style = small)
+        }
+        RetifsService.lastExit != null -> {
+            Text("retifs stopped", style = title, color = MaterialTheme.colorScheme.error)
+            Text(RetifsService.lastExit ?: "", style = small)
+            Text("It's started again in a few seconds; Restart tries at once.", style = small)
+        }
+        else -> {
+            Text("retifs isn't running", style = title)
+            Text("Start starts it.", style = small)
+        }
+    }
+}
+
 @Composable
 fun Reticulum(up: Boolean) {
     val context = LocalContext.current

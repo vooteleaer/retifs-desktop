@@ -224,6 +224,9 @@ public:
 			<< (library.GetBool("lazy", false) ? "fetched as needed"
 				: BString(library.GetString("keep", "")) == "all"
 					? "kept on this device" : "content fetched as needed");
+		BString seen(library.GetString("seen", ""));
+		if (seen.Length() > 0)
+			what << "  ·  " << seen;
 
 		float em = be_plain_font->Size();
 		SetExplicitMaxSize(BSize(B_SIZE_UNLIMITED, B_SIZE_UNSET));

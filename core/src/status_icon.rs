@@ -7,6 +7,8 @@
 pub struct TrayState {
     pub retifs_up: bool,
     pub node: Option<String>,
+    /// While retifs starts: what it's doing.
+    pub starting: Option<String>,
     pub reticulum_up: bool,
     /// Connections to other nodes that are up, of those configured.
     pub links_up: usize,
@@ -31,6 +33,7 @@ impl TrayState {
         TrayState {
             retifs_up: status.up,
             node: status.node.clone(),
+            starting: status.starting_text(),
             reticulum_up: r.running,
             links_up: outward.iter().filter(|i| i.up).count(),
             links: outward.len(),
@@ -49,7 +52,10 @@ impl TrayState {
         vec![
             match &self.node {
                 Some(n) if self.retifs_up => format!("retifs: running, node {}…", &n[..8.min(n.len())]),
-                _ => "retifs: not running".to_string(),
+                _ => match &self.starting {
+                    Some(step) => format!("retifs: starting ({step})"),
+                    None => "retifs: not running".to_string(),
+                },
             },
             if self.reticulum_up { format!("Reticulum: running, {} of {} connection(s) up", self.links_up, self.links) } else { "Reticulum: no shared instance".to_string() },
         ]
@@ -90,7 +96,7 @@ mod tests {
 
     #[test]
     fn health_and_lines() {
-        let mut s = TrayState { retifs_up: true, node: Some("1b95a9e9cafe".into()), reticulum_up: true, links_up: 0, links: 2 };
+        let mut s = TrayState { retifs_up: true, node: Some("1b95a9e9cafe".into()), starting: None, reticulum_up: true, links_up: 0, links: 2 };
         assert_eq!(s.health(), Health::Partly, "up but nobody reachable");
         s.links_up = 1;
         assert_eq!(s.health(), Health::Good);

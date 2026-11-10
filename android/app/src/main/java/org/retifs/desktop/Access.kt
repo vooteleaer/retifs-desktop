@@ -40,6 +40,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
@@ -181,9 +182,16 @@ class AccessActivity : ComponentActivity() {
         val chosen = remember { mutableStateListOf<String>() }
         var write by remember { mutableStateOf(before?.optBoolean("write") ?: asksWrite) }
         LaunchedEffect(Unit) {
-            val s = JSONObject(core { Core.status() })
+            var s = JSONObject(core { Core.status() })
+            // While retifs starts: what it's at, then on once it answers.
+            while (!s.optBoolean("up") && (s.optJSONObject("starting") != null || RetifsService.daemonAlive)) {
+                error = "retifs is starting: " + (s.optJSONObject("starting")?.optString("text") ?: "starting the daemon") + "…"
+                delay(1_000)
+                s = JSONObject(core { Core.status() })
+            }
+            error = ""
             if (!s.optBoolean("up")) {
-                error = "retifs isn't running yet: " + s.optString("error")
+                error = "retifs isn't running: start it in the retifs app (" + s.optString("error") + ")"
                 return@LaunchedEffect
             }
             val list = s.optJSONArray("libraries") ?: JSONArray()

@@ -18,6 +18,8 @@ pub fn status() -> Value {
         "chunks": s.chunks,
         "usage": s.usage,
         "error": s.error,
+        // While it starts: the step, its progress (0 to 1) if known, since when.
+        "starting": s.starting.as_ref().map(|st| json!({ "step": st.step, "progress": st.progress, "since_ms": st.since_ms, "text": s.starting_text() })),
         "libraries": libraries,
     })
 }

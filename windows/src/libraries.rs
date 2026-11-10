@@ -156,7 +156,7 @@ unsafe fn report(parent: HWND, id: i32, font: windows::Win32::Graphics::Gdi::HFO
 pub unsafe fn build(hwnd: HWND, font: windows::Win32::Graphics::Gdi::HFONT) -> Pages {
     FONT.with(|f| *f.borrow_mut() = font);
     let libs = report(hwnd, ID_LIBS, font);
-    columns(libs, &[("Library", 170), ("For", 130), ("Shared", 80), ("You may", 160), ("Records", 80), ("Peers", 60), ("On this device", 170)]);
+    columns(libs, &[("Library", 170), ("For", 130), ("Shared", 80), ("You may", 160), ("Records", 80), ("Peers", 60), ("Peers seen", 130), ("On this device", 170)]);
     let button = |text: &str, id: i32| child(hwnd, WC_BUTTONW, text, WS_TABSTOP | WINDOW_STYLE(BS_PUSHBUTTON as u32), id, font);
     let libs_buttons = vec![
         button("New library…", ID_NEW),
@@ -237,6 +237,7 @@ pub unsafe fn show(p: &Pages, libs: &[Value], heard: &[HeardLibrary]) {
                 format!("{}{}", j["access"].as_str().unwrap_or(""), if j["own"].as_bool().unwrap_or(false) { " · yours" } else { "" }),
                 number(j["records"].as_u64().unwrap_or(0)),
                 j["peers"].as_u64().unwrap_or(0).to_string(),
+                j["seen"].as_str().unwrap_or("").trim_start_matches("peers seen ").to_string(),
                 on_device,
             ],
         );

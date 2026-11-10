@@ -34,6 +34,8 @@ class RetifsService : Service() {
                 return START_NOT_STICKY
             }
             ACTION_RESTART -> {
+                restarting = true
+                lastExit = null
                 retifsd?.destroy()
                 return START_STICKY
             }
@@ -62,6 +64,7 @@ class RetifsService : Service() {
 
     override fun onDestroy() {
         running = false
+        daemonAlive = false
         supervisor?.interrupt()
         retifsd?.destroy()
         super.onDestroy()
@@ -116,15 +119,23 @@ class RetifsService : Service() {
                 // doesn't attach to a new shared instance by itself. Away for
                 // two checks running: one missed check is a busy phone.
                 if (up && downs >= 2 && retifsd?.isAlive == true) {
+                    restarting = true
                     retifsd?.destroy()
                     retifsd?.waitFor()
                 }
                 downs = if (up) 0 else downs + 1
+                // Stopped by itself (not by Restart): why, for the app to show.
+                retifsd?.let { old ->
+                    if (!old.isAlive && !restarting) lastExit = "exit code ${old.exitValue()}" + logTail(File(p.logs, "retifsd.log")).let { if (it.isEmpty()) "" else ":\n$it" }
+                }
                 if (retifsd?.isAlive != true && up) {
+                    restarting = false
                     retifsd = start(p.retifsd, "retifsd", "--default-libraries", defaultLibraries().absolutePath)
                     if (firstStart) phoneDefaults()
                     firstStart = false
                 }
+                daemonAlive = retifsd?.isAlive == true
+                waitingForReticulum = !up
                 when {
                     up -> update()
                     prnsApp() -> update("waiting for Reticulum (Prns)")
@@ -162,13 +173,22 @@ class RetifsService : Service() {
         }
         if (Core.saveSettings(defaults.toString()).isEmpty()) {
             prefs.edit().putInt("phone-defaults-version", PHONE_DEFAULTS).apply()
+            restarting = true
             retifsd?.destroy() // restarted by the loop, with the setting
         }
     }
 
+    /** The last lines of a log, for saying why retifsd stopped. */
+    private fun logTail(f: File, lines: Int = 4): String =
+        runCatching { f.readLines().takeLast(lines).joinToString("\n") }.getOrDefault("")
+
     private fun update(note: String? = null) {
         val text = note ?: try {
-            if (Core.up()) "retifs running" else "retifs starting"
+            val s = JSONObject(Core.status())
+            when {
+                s.optBoolean("up") -> "retifs running"
+                else -> s.optJSONObject("starting")?.optString("text")?.let { "retifs starting: $it" } ?: "retifs starting"
+            }
         } catch (e: Exception) {
             "retifs: ${e.message}"
         }
@@ -201,6 +221,14 @@ class RetifsService : Service() {
         const val PRNS_APP = "org.personal.hopspot"
         const val ACTION_STOP = "org.retifs.desktop.STOP"
         const val ACTION_RESTART = "org.retifs.desktop.RESTART"
+
+        /** Whether retifsd's process runs (it may not answer yet: starting). */
+        @Volatile var daemonAlive = false
+        /** Waiting for Reticulum before retifsd can start. */
+        @Volatile var waitingForReticulum = false
+        /** Why retifsd last stopped by itself: its exit and last log lines. */
+        @Volatile var lastExit: String? = null
+        @Volatile private var restarting = false
 
         fun start(context: Context) {
             context.startForegroundService(Intent(context, RetifsService::class.java))
