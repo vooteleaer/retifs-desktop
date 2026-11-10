@@ -23,6 +23,8 @@ import java.io.File
 class RetifsService : Service() {
     private var retifsd: Process? = null
     @Volatile private var running = false
+    /** Wakes the supervisor before its next round (Restart). */
+    private val wake = java.util.concurrent.Semaphore(0)
     private var supervisor: Thread? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -36,7 +38,13 @@ class RetifsService : Service() {
             ACTION_RESTART -> {
                 restarting = true
                 lastExit = null
-                retifsd?.destroy()
+                // Started again at once, not at the supervisor's next round.
+                val old = retifsd
+                Thread {
+                    old?.destroy()
+                    old?.waitFor()
+                    wake.release()
+                }.start()
                 return START_STICKY
             }
         }
@@ -141,7 +149,8 @@ class RetifsService : Service() {
                     prnsApp() -> update("waiting for Reticulum (Prns)")
                     else -> update("no Reticulum: install Prns")
                 }
-                Thread.sleep(if (retifsd?.isAlive == true) 15_000 else 3_000)
+                wake.tryAcquire(if (retifsd?.isAlive == true) 15_000L else 3_000L, java.util.concurrent.TimeUnit.MILLISECONDS)
+                wake.drainPermits()
             } catch (e: InterruptedException) {
                 return
             } catch (e: Exception) {

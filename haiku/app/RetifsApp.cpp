@@ -29,6 +29,7 @@
 #include <Roster.h>
 #include <ScrollView.h>
 #include <StatusBar.h>
+#include <ctype.h>
 #include <SeparatorView.h>
 #include <SpaceLayoutItem.h>
 #include <GroupView.h>
@@ -1049,6 +1050,11 @@ private:
 		BFont bold(be_bold_font);
 		bold.SetSize(bold.Size() * 1.2);
 		fState->SetFont(&bold);
+		// While retifs starts: how far (its step's progress, or moving).
+		fStarting = new BStatusBar("starting", NULL);
+		fStarting->SetBarHeight(8);
+		fStarting->SetMaxValue(100);
+		fStarting->Hide();
 		fNode = new BStringView("node", "");
 		fUsage = new BStringView("usage", "");
 		fUsage2 = new BStringView("usage2", "");
@@ -1067,6 +1073,7 @@ private:
 		BLayoutBuilder::Group<>(view, B_VERTICAL)
 			.SetInsets(B_USE_DEFAULT_SPACING)
 			.Add(fState)
+			.Add(fStarting)
 			.Add(fNode)
 			.Add(fUsage)
 			.Add(fUsage2)
@@ -1491,7 +1498,35 @@ private:
 		state->FindMessage("settings", &settings);
 
 		// This device.
-		if (status.GetBool("up", false)) {
+		BMessage starting;
+		bool isStarting = !status.GetBool("up", false)
+			&& status.FindMessage("starting", &starting) == B_OK;
+		if (isStarting) {
+			double progress;
+			if (starting.FindDouble("progress", &progress) == B_OK)
+				fStarting->SetTo(progress * 100);
+			else {
+				// No progress said: moving, so it doesn't look stuck.
+				fPulse = (fPulse + 20) % 120;
+				fStarting->SetTo(fPulse > 100 ? 100 : fPulse);
+			}
+			if (fStarting->IsHidden())
+				fStarting->Show();
+		} else if (!fStarting->IsHidden())
+			fStarting->Hide();
+		// Every second while it starts, so the step and its progress move.
+		if (fRunner != NULL)
+			fRunner->SetInterval(isStarting ? 1000000 : 5000000);
+
+		if (isStarting) {
+			fState->SetText("retifs is starting…");
+			BString step(starting.GetString("text", ""));
+			if (step.Length() > 0)
+				step.SetByteAt(0, toupper(step.ByteAt(0)));
+			fNode->SetText(step);
+			fUsage->SetText("");
+			fUsage2->SetText("");
+		} else if (status.GetBool("up", false)) {
 			fState->SetText("retifs is running");
 			BString node("Node ");
 			node << status.GetString("node", "");
@@ -1574,6 +1609,8 @@ private:
 
 	BTabView* fTabs;
 	BStringView* fState;
+	BStatusBar* fStarting;
+	int32 fPulse = 0;
 	BStringView* fNode;
 	BStringView* fUsage;
 	BStringView* fUsage2;
@@ -1593,7 +1630,7 @@ private:
 	BStringList fSettingKeys;
 	bool fSettingsShown;
 	Worker* fWorker;
-	BMessageRunner* fRunner;
+	BMessageRunner* fRunner = NULL;
 };
 
 

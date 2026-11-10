@@ -4,7 +4,7 @@
 //! posts a message back.
 
 use std::cell::RefCell;
-use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::sync::{Condvar, Mutex};
 use std::time::Duration;
 
@@ -66,6 +66,8 @@ static NOTE: Mutex<String> = Mutex::new(String::new());
 pub(crate) static MAIN: AtomicIsize = AtomicIsize::new(0);
 /// Wakes the worker before its next round (after a change).
 static POKE: (Mutex<bool>, Condvar) = (Mutex::new(false), Condvar::new());
+/// retifs is starting: the Overview's progress bar is shown.
+static STARTING: AtomicBool = AtomicBool::new(false);
 
 struct Ui {
     hwnd: HWND,
@@ -74,6 +76,8 @@ struct Ui {
     pages: [Vec<HWND>; 5],
     lib_pages: crate::libraries::Pages,
     overview: HWND,
+    /// While retifs starts: how far (its step's progress, or moving).
+    bar: HWND,
     net: HWND,
     list: HWND,
     edits: Vec<(&'static str, &'static str, HWND, HWND)>,
@@ -310,7 +314,9 @@ fn worker() {
         let (m, c) = &POKE;
         let mut poked = m.lock().unwrap();
         if !*poked {
-            poked = c.wait_timeout(poked, Duration::from_secs(5)).unwrap().0;
+            // Every second while retifs starts, so its step and progress move.
+            let every = if STARTING.load(Ordering::Relaxed) { 1 } else { 5 };
+            poked = c.wait_timeout(poked, Duration::from_secs(every)).unwrap().0;
         }
         *poked = false;
     }
@@ -388,6 +394,8 @@ unsafe fn build(hwnd: HWND, icons: [HICON; 3]) {
 
     // Overview.
     let overview = label("Asking retifs…");
+    let bar = child(hwnd, PROGRESS_CLASSW, "", WINDOW_STYLE(0), 0, font);
+    SendMessageW(bar, PBM_SETRANGE32, WPARAM(0), LPARAM(1000));
     let start = button("Start retifs", ID_START);
     let stop = button("Stop retifs", ID_STOP);
     let restart = button("Restart retifs", ID_RESTART);
@@ -439,6 +447,7 @@ unsafe fn build(hwnd: HWND, icons: [HICON; 3]) {
             ],
             lib_pages,
             overview,
+            bar,
             net,
             list,
             edits,
@@ -477,8 +486,9 @@ unsafe fn layout(hwnd: HWND) {
         let place = |h: HWND, x: i32, y: i32, w: i32, hh: i32| {
             let _ = MoveWindow(h, x, y, w, hh, true);
         };
-        // Overview: text, then the buttons.
-        place(u.overview, x, y, pw, ph - bh - s(10));
+        // Overview: text, the progress bar while starting, then the buttons.
+        place(u.overview, x, y, pw, ph - bh - s(40));
+        place(u.bar, x, y + ph - bh - s(30), pw, s(16));
         for (i, b) in u.pages[0][1..].iter().enumerate() {
             place(*b, x + i as i32 * (bw + s(8)), y + ph - bh, bw, bh);
         }
@@ -512,7 +522,30 @@ unsafe fn show_page(n: usize) {
                 let _ = ShowWindow(*h, if i == n { SW_SHOW } else { SW_HIDE });
             }
         }
+        let _ = ShowWindow(u.bar, if n == 0 && STARTING.load(Ordering::Relaxed) { SW_SHOW } else { SW_HIDE });
     });
+}
+
+/// The progress bar while retifs starts: its step's progress when known,
+/// else moving (marquee); hidden once it runs.
+unsafe fn show_starting(u: &Ui, st: &Status) {
+    let starting = !st.up && st.starting.is_some();
+    STARTING.store(starting, Ordering::Relaxed);
+    let on_overview = SendMessageW(u.tabs, TCM_GETCURSEL, WPARAM(0), LPARAM(0)).0 == 0;
+    let _ = ShowWindow(u.bar, if starting && on_overview { SW_SHOW } else { SW_HIDE });
+    let Some(s) = &st.starting else { return };
+    let style = GetWindowLongPtrW(u.bar, GWL_STYLE);
+    match s.progress {
+        Some(p) => {
+            SetWindowLongPtrW(u.bar, GWL_STYLE, style & !(PBS_MARQUEE as isize));
+            SendMessageW(u.bar, PBM_SETMARQUEE, WPARAM(0), LPARAM(0));
+            SendMessageW(u.bar, PBM_SETPOS, WPARAM((p * 1000.0) as usize), LPARAM(0));
+        }
+        None => {
+            SetWindowLongPtrW(u.bar, GWL_STYLE, style | PBS_MARQUEE as isize);
+            SendMessageW(u.bar, PBM_SETMARQUEE, WPARAM(1), LPARAM(30));
+        }
+    }
 }
 
 pub(crate) unsafe fn set_text(h: HWND, text: &str) {
@@ -582,6 +615,7 @@ unsafe fn refreshed() {
             lines.push(format!("{what} ({name}.exe): {}", state.clone().unwrap_or_else(|| "?".into())));
         }
         set_text(u.overview, &lines.join("\r\n"));
+        show_starting(u, st);
 
         let r = &s.reticulum;
         let bin = r.prnsd.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "prnsd not found".into());

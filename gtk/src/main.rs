@@ -109,6 +109,8 @@ fn bg<T: Send + 'static>(d: &Arc<Daemon>, work: impl FnOnce(&Daemon) -> T + Send
 /// The overview's widgets, updated on each status poll.
 struct Overview {
     node: adw::ActionRow,
+    /// While retifs starts: how far (its step's progress, or pulsing).
+    starting: gtk::ProgressBar,
     storage: Vec<(adw::ActionRow, gtk::LevelBar)>,
     namespaces: adw::PreferencesGroup,
     ns_rows: RefCell<Vec<adw::ActionRow>>,
@@ -349,8 +351,13 @@ fn build(app: &adw::Application, hidden: bool) {
         }
     };
     poll();
-    glib::timeout_add_seconds_local(5, move || {
-        poll();
+    // Every 5 s; every second while retifs starts, so its step and progress move.
+    let (second, ticking) = (std::cell::Cell::new(0u32), me.clone());
+    glib::timeout_add_seconds_local(1, move || {
+        second.set(second.get() + 1);
+        if ticking.starting.borrow().is_some() || second.get() % 5 == 0 {
+            poll();
+        }
         glib::ControlFlow::Continue
     });
 
@@ -452,6 +459,11 @@ fn label(text: &str) -> gtk::Label {
 
 fn overview_widgets() -> Overview {
     let node = adw::ActionRow::builder().title("Node").subtitle("—").subtitle_selectable(true).build();
+    let starting = gtk::ProgressBar::new();
+    starting.set_valign(gtk::Align::Center);
+    starting.set_width_request(220);
+    starting.set_visible(false);
+    node.add_suffix(&starting);
     let storage = ["Own data", "Held for others", "Cache", "Disk"]
         .into_iter()
         .map(|t| {
@@ -464,10 +476,16 @@ fn overview_widgets() -> Overview {
         })
         .collect();
     let namespaces = adw::PreferencesGroup::builder().title("Libraries").build();
-    Overview { node, storage, namespaces, ns_rows: RefCell::new(Vec::new()) }
+    Overview { node, starting, storage, namespaces, ns_rows: RefCell::new(Vec::new()) }
 }
 
 fn show_status(o: &Overview, s: &Status) {
+    o.starting.set_visible(!s.up && s.starting.is_some());
+    match s.starting.as_ref().map(|st| st.progress) {
+        Some(Some(p)) => o.starting.set_fraction(p),
+        Some(None) => o.starting.pulse(),
+        None => {}
+    }
     match &s.node {
         Some(n) => {
             o.node.set_title(n);
