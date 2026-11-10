@@ -173,6 +173,12 @@ impl Daemon {
         self.rt.block_on(Client::connect(&self.store)).map_err(|e| e.to_string())
     }
 
+    /// Asks retifsd to stop cleanly, closing its store (as SIGTERM does).
+    pub fn stop(&self) -> Result<(), String> {
+        let mut c = self.client()?;
+        self.rt.block_on(c.stop()).map_err(|e| e.to_string())
+    }
+
     pub fn status(&self) -> Status {
         let store = self.store.display().to_string();
         let down = |error: String| Status { store: store.clone(), error: Some(error), starting: libretifs::starting(&self.store), ..Default::default() };

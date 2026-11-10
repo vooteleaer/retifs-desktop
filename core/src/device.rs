@@ -460,8 +460,21 @@ pub fn service(name: &str, action: &str) -> Result<(), String> {
     use std::os::windows::process::CommandExt;
     let exe = format!("{name}.exe");
     if action == "stop" || action == "restart" {
-        let _ = Command::new("taskkill").args(["/IM", &exe, "/F"]).creation_flags(CREATE_NO_WINDOW).output();
-        std::thread::sleep(std::time::Duration::from_millis(500));
+        // retifsd is asked to stop, so it closes its store (killed, its index
+        // is checked at the next start: minutes on a large store); killed
+        // only if it hasn't stopped within 35 s.
+        if name == "retifsd" && running(&exe) && crate::Daemon::new().stop().is_ok() {
+            for _ in 0..70 {
+                if !running(&exe) {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+        }
+        if running(&exe) {
+            let _ = Command::new("taskkill").args(["/IM", &exe, "/F"]).creation_flags(CREATE_NO_WINDOW).output();
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
     }
     if action == "start" || action == "restart" {
         let logs = PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_default()).join("retifs").join("logs");
