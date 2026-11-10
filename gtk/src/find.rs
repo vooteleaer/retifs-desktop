@@ -3,7 +3,12 @@
 //! update as records change; a search can be saved (in `me`, so every device
 //! of the user's has it) and opened again from the sidebar.
 
-use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc};
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashMap,
+    rc::Rc,
+    sync::Arc,
+};
 
 use adw::prelude::*;
 use gtk::{gio, glib};
@@ -32,6 +37,9 @@ struct Condition {
 pub struct Find {
     pub page: gtk::Box,
     daemon: Arc<Daemon>,
+    /// Waits for the search's namespaces to change, so the window's other
+    /// calls aren't held up meanwhile.
+    watcher: Arc<Daemon>,
     scope: gtk::DropDown,
     scope_names: RefCell<Vec<String>>,
     /// A saved query's own namespaces, until the scope is changed by hand.
@@ -41,9 +49,10 @@ pub struct Find {
     conditions: RefCell<Vec<Condition>>,
     results: gtk::ListBox,
     count: gtk::Label,
-    /// The search on screen: (scope, terms), and the change counts it saw.
+    /// The search on screen: (scope, terms), and how many have been run (a
+    /// watch for an earlier one stops).
     active: RefCell<Option<(Vec<String>, Vec<String>)>>,
-    seen: RefCell<HashMap<String, u64>>,
+    runs: Cell<u64>,
     /// Called after a search is saved (the sidebar lists saved ones).
     pub on_saved: RefCell<Option<Box<dyn Fn()>>>,
 }
@@ -92,9 +101,11 @@ impl Find {
         let scroll = gtk::ScrolledWindow::builder().child(&results).vexpand(true).hscrollbar_policy(gtk::PolicyType::Never).build();
         page.append(&scroll);
 
+        let watcher = Arc::new(Daemon::at(daemon.store().to_path_buf()));
         let f = Rc::new(Find {
             page,
             daemon,
+            watcher,
             scope,
             scope_names: RefCell::new(Vec::new()),
             saved_scope: RefCell::new(None),
@@ -104,7 +115,7 @@ impl Find {
             results,
             count,
             active: RefCell::new(None),
-            seen: RefCell::new(HashMap::new()),
+            runs: Cell::new(0),
             on_saved: RefCell::new(None),
         });
         f.add_condition("", "is", "");
@@ -125,14 +136,6 @@ impl Find {
             f.scope.connect_selected_notify(move |_| {
                 *f2.saved_scope.borrow_mut() = None;
                 f2.scope_note.set_text("");
-            });
-        }
-        // Live: when a namespace in scope changes, the search runs again.
-        {
-            let f2 = f.clone();
-            glib::timeout_add_seconds_local(3, move || {
-                f2.refresh_if_changed();
-                glib::ControlFlow::Continue
             });
         }
         f
@@ -226,21 +229,44 @@ impl Find {
             return;
         }
         *self.active.borrow_mut() = Some((scope.clone(), terms.clone()));
+        let run = self.runs.get() + 1;
+        self.runs.set(run);
         let f = self.clone();
-        let (s2, t2) = (scope.clone(), terms.clone());
-        bg(&self.daemon, move |d| (d.find(&s2, &t2), d.change_counts(&s2)), move |(found, counts)| {
-            *f.seen.borrow_mut() = counts;
+        // The counts before the search, so a change while it runs is seen.
+        bg(&self.daemon, move |d| {
+            let counts = d.change_counts(&scope);
+            (d.find(&scope, &terms), counts)
+        }, move |(found, counts)| {
             f.show(found);
+            f.watch_changes(run, counts);
         });
     }
 
-    fn refresh_if_changed(self: &Rc<Self>) {
-        let Some((scope, terms)) = self.active.borrow().clone() else { return };
+    /// Live: when a namespace in scope changes, the search runs again.
+    /// retifsd says so the moment one does (`Daemon::wait_change`); a
+    /// later run's watch takes over from this one.
+    fn watch_changes(self: &Rc<Self>, run: u64, mut known: HashMap<String, u64>) {
+        let Some((scope, _)) = self.active.borrow().clone() else { return };
+        if self.runs.get() != run {
+            return;
+        }
         let f = self.clone();
-        bg(&self.daemon, move |d| d.change_counts(&scope), move |counts| {
-            if counts != *f.seen.borrow() {
-                *f.active.borrow_mut() = Some((f.scope(), terms));
+        bg(&self.watcher, move |d| {
+            let mut changed = d.wait_change(&mut known, std::time::Duration::from_secs(60));
+            // A namespace made or joined meanwhile (looking everywhere), or
+            // one retifsd answers for again, is only seen by asking.
+            if !changed && (scope.is_empty() || known.is_empty()) {
+                changed = d.change_counts(&scope).keys().any(|ns| !known.contains_key(ns));
+            }
+            (changed, known)
+        }, move |(changed, known)| {
+            if f.runs.get() != run {
+                return;
+            }
+            if changed {
                 f.run();
+            } else {
+                f.watch_changes(run, known);
             }
         });
     }

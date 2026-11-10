@@ -74,6 +74,11 @@ object Accounts {
         }, "retifs-address-books").start()
     }
 
+    /** Syncs library `ns`'s address book now (if it has one). */
+    fun syncBook(context: Context, ns: String) {
+        if (AccountManager.get(context).getAccountsByType(BOOK).any { it.name == ns }) request(Account(ns, BOOK))
+    }
+
     private fun request(account: Account) {
         val extras = Bundle().apply {
             putBoolean(ContentResolver.SYNC_EXTRAS_MANUAL, true)

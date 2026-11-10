@@ -47,6 +47,13 @@ object Core {
     external fun contactSave(contact: String, before: String): String
     external fun contactDelete(ns: String, id: String): String
 
+    /**
+     * Waits until one of the libraries in `known` (`{"name": change count or
+     * null}`) changes, for at most `timeoutMs`: `{"changed", "known"}`, the
+     * counts brought up to date (one retifsd has none for left out).
+     */
+    external fun waitChange(known: String, timeoutMs: Int): String
+
     // Events for the calendar sync adapter (the system's Calendar).
     /** `[{"ns", "writable", "color"}]` or `{"error"}`. */
     external fun calendarLibraries(): String

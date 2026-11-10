@@ -26,6 +26,7 @@ class RetifsService : Service() {
     /** Wakes the supervisor before its next round (Restart). */
     private val wake = java.util.concurrent.Semaphore(0)
     private var supervisor: Thread? = null
+    private var watcher: Thread? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -59,21 +60,23 @@ class RetifsService : Service() {
         }
         running = true
         supervisor = Thread(::supervise, "retifs-supervisor").apply { start() }
+        watcher = Thread(::watchLibraries, "retifs-library-watch").apply { start() }
         // The address books in the system's Contacts, after a boot or an
         // update too (once the user has allowed it).
-        val calendarAllowed = checkSelfPermission(android.Manifest.permission.WRITE_CALENDAR) == android.content.pm.PackageManager.PERMISSION_GRANTED
-        if (contactsAllowed() || calendarAllowed) Accounts.ensure(this)
+        if (contactsAllowed() || calendarAllowed()) Accounts.ensure(this)
         if (contactsAllowed()) Accounts.syncContacts(this)
-        if (calendarAllowed) Accounts.syncCalendars()
+        if (calendarAllowed()) Accounts.syncCalendars()
         return START_STICKY
     }
 
     private fun contactsAllowed() = checkSelfPermission(android.Manifest.permission.WRITE_CONTACTS) == android.content.pm.PackageManager.PERMISSION_GRANTED
+    private fun calendarAllowed() = checkSelfPermission(android.Manifest.permission.WRITE_CALENDAR) == android.content.pm.PackageManager.PERMISSION_GRANTED
 
     override fun onDestroy() {
         running = false
         daemonAlive = false
         supervisor?.interrupt()
+        watcher?.interrupt()
         retifsd?.destroy()
         super.onDestroy()
     }
@@ -158,6 +161,48 @@ class RetifsService : Service() {
                 Thread.sleep(15_000)
             }
         }
+    }
+
+    /**
+     * Syncs an address book, or the calendars, when its library changes:
+     * retifsd says so the moment one does (`Core.waitChange`), so others'
+     * changes are in the system's Contacts and Calendar at once rather than
+     * at the next hourly sync.
+     */
+    private fun watchLibraries() {
+        var known = JSONObject()
+        while (running) {
+            try {
+                // The libraries now (one may have come or gone); a new one
+                // watched from its count now.
+                val books = if (contactsAllowed()) names(Core.contactLibraries()) else emptySet()
+                val calendars = if (calendarAllowed()) names(Core.calendarLibraries()) else emptySet()
+                val watch = JSONObject()
+                for (ns in books + calendars) watch.put(ns, known.opt(ns) ?: JSONObject.NULL)
+                // None (or retifsd away): asking which there are is a search, not every few seconds.
+                if (watch.length() == 0) {
+                    Thread.sleep(60_000)
+                    continue
+                }
+                val answer = JSONObject(Core.waitChange(watch.toString(), 60_000))
+                known = answer.optJSONObject("known") ?: JSONObject()
+                if (!answer.optBoolean("changed")) continue
+                val changed = known.keys().asSequence().filter { !watch.isNull(it) && known.optLong(it) != watch.optLong(it) }.toList()
+                for (ns in changed) if (ns in books) Accounts.syncBook(this, ns)
+                if (changed.any { it in calendars }) Accounts.syncCalendars()
+            } catch (e: InterruptedException) {
+                return
+            } catch (e: Exception) {
+                // retifsd away, or an answer not understood: not at once again.
+                try { Thread.sleep(15_000) } catch (stop: InterruptedException) { return }
+            }
+        }
+    }
+
+    /** The `ns` of each library in a `[{"ns", …}]` answer; none for an error. */
+    private fun names(answer: String): Set<String> {
+        val list = org.json.JSONTokener(answer).nextValue() as? JSONArray ?: return emptySet()
+        return (0 until list.length()).map { list.getJSONObject(it).getString("ns") }.toSet()
     }
 
     /**

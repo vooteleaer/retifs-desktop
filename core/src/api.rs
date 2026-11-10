@@ -214,6 +214,22 @@ pub fn tray() -> Value {
     json!({ "health": health, "lines": t.lines() })
 }
 
+/// Waits until one of the libraries in `known` (`{"name": change count}`)
+/// changes, for at most `timeout_ms`: `{"changed", "known"}`, every count
+/// brought up to date. One whose count isn't known yet (`null`) is watched
+/// from its count now; one retifsd has no count for is left out.
+pub fn wait_change(known: &Value, timeout_ms: u64) -> Value {
+    let d = Daemon::new();
+    let given = known.as_object().cloned().unwrap_or_default();
+    let mut counts: std::collections::HashMap<String, u64> = given.iter().filter_map(|(ns, n)| n.as_u64().map(|n| (ns.clone(), n))).collect();
+    let fresh: Vec<String> = given.keys().filter(|ns| !counts.contains_key(*ns)).cloned().collect();
+    if !fresh.is_empty() {
+        counts.extend(d.change_counts(&fresh));
+    }
+    let changed = d.wait_change(&mut counts, std::time::Duration::from_millis(timeout_ms));
+    json!({ "changed": changed, "known": counts })
+}
+
 /// The services retifs runs as here, with their state.
 pub fn services() -> Value {
     let list: Vec<Value> = device::SERVICES

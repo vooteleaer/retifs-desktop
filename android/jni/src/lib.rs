@@ -203,6 +203,15 @@ pub extern "system" fn Java_org_retifs_desktop_Core_contactDelete<'l>(mut env: J
     result(&mut env, r)
 }
 
+/// Waits until one of the libraries in `known` (`{"name": change count or
+/// null}`) changes, for at most `timeout_ms`: `{"changed", "known"}` (see
+/// `api::wait_change`).
+#[no_mangle]
+pub extern "system" fn Java_org_retifs_desktop_Core_waitChange<'l>(mut env: JNIEnv<'l>, _: JClass<'l>, known: JString<'l>, timeout_ms: jint) -> jstring {
+    let known: serde_json::Value = serde_json::from_str(&arg(&mut env, &known)).unwrap_or_default();
+    out(&mut env, api::wait_change(&known, timeout_ms.max(0) as u64).to_string())
+}
+
 // Events for the calendar sync adapter (Android's own Calendar): retifs-calendar's
 // records, as JSON.
 
