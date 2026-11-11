@@ -8,6 +8,8 @@
 mod app;
 #[cfg(windows)]
 mod libraries;
+#[cfg(windows)]
+mod recovery;
 
 #[cfg(windows)]
 fn main() {

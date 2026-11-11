@@ -36,6 +36,8 @@ const ID_TABS: i32 = 100;
 const ID_START: i32 = 102;
 const ID_STOP: i32 = 103;
 const ID_RESTART: i32 = 104;
+const ID_KIT: i32 = 105;
+const ID_RECOVER_KIT: i32 = 106;
 const ID_LIST: i32 = 111;
 const ID_ADD: i32 = 112;
 const ID_TOGGLE: i32 = 113;
@@ -220,6 +222,7 @@ pub fn run() {
         let add_class = WNDCLASSW { lpfnWndProc: Some(addproc), lpszClassName: ADD_CLASS, ..class };
         RegisterClassW(&add_class);
         crate::libraries::register(&class);
+        crate::recovery::register(&class);
         let Ok(hwnd) = CreateWindowExW(
             WINDOW_EX_STYLE(0),
             CLASS,
@@ -242,7 +245,7 @@ pub fn run() {
             open(hwnd);
             crate::libraries::open_link(hwnd, link);
         }
-        // At login: retifs once Reticulum (Prns's) is up; the window stays hidden.
+        // At login: retifs once a Reticulum shared instance is up; the window stays hidden.
         if autostart {
             std::thread::spawn(|| {
                 let did = device::supervise();
@@ -399,6 +402,9 @@ unsafe fn build(hwnd: HWND, icons: [HICON; 3]) {
     let start = button("Start retifs", ID_START);
     let stop = button("Stop retifs", ID_STOP);
     let restart = button("Restart retifs", ID_RESTART);
+    // The recovery kit (retifs ADR-0033).
+    let kit = button("Recovery kit…", ID_KIT);
+    let recover = button("Recover from a kit…", ID_RECOVER_KIT);
 
     // Network.
     let net = label("Asking Reticulum…");
@@ -439,7 +445,7 @@ unsafe fn build(hwnd: HWND, icons: [HICON; 3]) {
             hwnd,
             tabs,
             pages: [
-                vec![overview, start, stop, restart],
+                vec![overview, start, stop, restart, kit, recover],
                 [vec![lib_pages.libs], lib_pages.libs_buttons.clone()].concat(),
                 vec![lib_pages.heard_note, lib_pages.heard, lib_pages.join],
                 vec![net, list, add, toggle, remove],
@@ -487,10 +493,12 @@ unsafe fn layout(hwnd: HWND) {
             let _ = MoveWindow(h, x, y, w, hh, true);
         };
         // Overview: text, the progress bar while starting, then the buttons.
-        place(u.overview, x, y, pw, ph - bh - s(40));
-        place(u.bar, x, y + ph - bh - s(30), pw, s(16));
+        // The recovery kit's two buttons in a row above the service buttons.
+        place(u.overview, x, y, pw, ph - 2 * bh - s(48));
+        place(u.bar, x, y + ph - 2 * bh - s(38), pw, s(16));
         for (i, b) in u.pages[0][1..].iter().enumerate() {
-            place(*b, x + i as i32 * (bw + s(8)), y + ph - bh, bw, bh);
+            let (col, row_y) = if i < 3 { (i, y + ph - bh) } else { (i - 3, y + ph - 2 * bh - s(8)) };
+            place(*b, x + col as i32 * (bw + s(8)), row_y, bw, bh);
         }
         crate::libraries::layout(&u.lib_pages, hwnd, x, y, pw, ph);
         // Network: a line, the list, the buttons.
@@ -618,16 +626,7 @@ unsafe fn refreshed() {
         show_starting(u, st);
 
         let r = &s.reticulum;
-        let bin = r.prnsd.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "prnsd not found".into());
-        set_text(
-            u.net,
-            &if r.running {
-                let up = r.uptime_s.map(|x| if x > 86_400.0 { format!("{:.0} d", x / 86_400.0) } else { format!("{:.0} h", x / 3600.0) }).unwrap_or_default();
-                format!("Reticulum is running: transport {}, up {up}.\r\n{bin}", r.transport_id.clone().unwrap_or_default())
-            } else {
-                format!("Reticulum isn't running: {}\r\n{bin}", r.error.clone().unwrap_or_default())
-            },
-        );
+        set_text(u.net, &format!("{}\r\n{}", if r.running { "Reticulum is running." } else { "Reticulum isn't running." }, device::summary(r)));
         // The connections, keeping the selection.
         let selected = SendMessageW(u.list, LVM_GETNEXTITEM, WPARAM(usize::MAX), LPARAM(LVNI_SELECTED as isize)).0;
         SendMessageW(u.list, LVM_DELETEALLITEMS, WPARAM(0), LPARAM(0));
@@ -812,12 +811,22 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     None => note("Pick a connection first"),
                 },
                 ID_SAVE => save_settings(),
+                ID_KIT => crate::recovery::make(hwnd),
+                ID_RECOVER_KIT => crate::recovery::recover(hwnd),
                 id => {
                     if let Some(p) = UI.with(|u| u.borrow().as_ref().map(|u| u.lib_pages.clone())) {
                         crate::libraries::command(&p, hwnd, id);
                     }
                 }
             }
+            LRESULT(0)
+        }
+        m if m == crate::recovery::WM_KIT => {
+            crate::recovery::kit_ready(hwnd);
+            LRESULT(0)
+        }
+        m if m == crate::recovery::WM_RECOVERED => {
+            crate::recovery::recovered(hwnd);
             LRESULT(0)
         }
         // A library's link, made on a thread: to the clipboard.

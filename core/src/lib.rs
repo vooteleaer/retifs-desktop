@@ -241,6 +241,26 @@ impl Daemon {
         self.request(&mut c, Request::NsLeave { ns: ns.into(), mine }).map(|_| ())
     }
 
+    /// Makes the user's recovery kit (retifs ADR-0033): its 24 words, shown
+    /// once, and the libraries it covers and doesn't.
+    pub fn recovery_create(&self) -> Result<RecoveryKit, String> {
+        let mut c = self.client()?;
+        match self.request(&mut c, Request::RecoveryCreate)? {
+            Response::RecoveryKit { words, covered, not_covered } => Ok(RecoveryKit { words, covered, not_covered }),
+            _ => Err("unexpected answer".into()),
+        }
+    }
+
+    /// Brings the user's libraries back on this device from the recovery
+    /// words; blocks until done (minutes). The libraries that came back.
+    pub fn recovery_restore(&self, words: &[String]) -> Result<Vec<String>, String> {
+        let mut c = self.client()?;
+        match self.request(&mut c, Request::RecoveryRestore { words: words.to_vec() })? {
+            Response::RecoveryRestored { libraries } => Ok(libraries),
+            _ => Err("unexpected answer".into()),
+        }
+    }
+
     /// Deletes `ns` on every member's device (only a member who may invite).
     pub fn delete_library(&self, ns: &str) -> Result<(), String> {
         let mut c = self.client()?;
@@ -686,4 +706,29 @@ mod tests {
         assert_eq!(super::human(1536), "1.5 KB");
         assert_eq!(super::human(5 << 30), "5.0 GB");
     }
+}
+
+/// A new recovery kit (retifs ADR-0033).
+#[derive(Debug, Clone)]
+pub struct RecoveryKit {
+    pub words: Vec<String>,
+    pub covered: Vec<String>,
+    pub not_covered: Vec<String>,
+}
+
+/// Words in a recovery kit.
+pub const RECOVERY_WORDS: usize = retifs_core::recovery::WORDS;
+
+/// What a recovery kit is, said before one is made.
+pub const RECOVERY_ABOUT: &str = "A recovery kit is 24 words that bring all your libraries back on a new device if you lose every device you have. You write them down on paper once; they are shown only now and kept nowhere. Whoever has them can open every library of yours, so keep them as you'd keep a key to your home.";
+
+/// The words typed so far, checked: Ok with the 24 words once they're all
+/// there and check out, else what's wrong (which word, or the checksum).
+pub fn check_recovery_words(text: &str) -> Result<Vec<String>, String> {
+    let words: Vec<String> = text.split_whitespace().map(|w| w.to_lowercase()).collect();
+    if words.len() < retifs_core::recovery::WORDS {
+        return Err(format!("{} of {} words", words.len(), retifs_core::recovery::WORDS));
+    }
+    let refs: Vec<&str> = words.iter().map(String::as_str).collect();
+    retifs_core::recovery::RecoverySeed::from_words(&refs).map(|_| words).map_err(|e| e.to_string())
 }

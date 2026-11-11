@@ -149,8 +149,8 @@ class RetifsService : Service() {
                 waitingForReticulum = !up
                 when {
                     up -> update()
-                    prnsApp() -> update("waiting for Reticulum (Prns)")
-                    else -> update("no Reticulum: install Prns")
+                    prnsApp() -> update("waiting for Reticulum")
+                    else -> update("no Reticulum: start a Reticulum app with a shared instance")
                 }
                 wake.tryAcquire(if (retifsd?.isAlive == true) 15_000L else 3_000L, java.util.concurrent.TimeUnit.MILLISECONDS)
                 wake.drainPermits()

@@ -252,3 +252,58 @@ pub unsafe extern "C" fn rd_free(s: *mut c_char) {
         drop(unsafe { CString::from_raw(s) });
     }
 }
+
+/// Makes the recovery kit (retifs ADR-0033): `{"text", "covers"}` (the
+/// words numbered in four columns, and what they cover) or `{"error"}`.
+#[unsafe(no_mangle)]
+pub extern "C" fn rd_recovery_create() -> *mut c_char {
+    let v = match api::recovery_create() {
+        Ok(k) => {
+            let words: Vec<String> = k["words"].as_array().into_iter().flatten().filter_map(|w| w.as_str().map(String::from)).collect();
+            let mut lines = vec![String::new(); 6];
+            for (i, w) in words.iter().enumerate() {
+                lines[i % 6].push_str(&format!("{:>2}. {w:<10}", i + 1));
+            }
+            let covered: Vec<String> = k["covered"].as_array().into_iter().flatten().filter_map(|w| w.as_str().map(String::from)).collect();
+            let not: Vec<String> = k["not_covered"].as_array().into_iter().flatten().filter_map(|w| w.as_str().map(String::from)).collect();
+            let covers = if !not.is_empty() {
+                format!("It covers {}. Not covered (no device of yours may invite there): {}.", covered.join(", "), not.join(", "))
+            } else {
+                format!("It covers all {} of your libraries, and those you make or join later.", covered.len())
+            };
+            serde_json::json!({ "text": lines.join("\n"), "covers": covers })
+        }
+        Err(e) => serde_json::json!({ "error": e }),
+    };
+    out(v.to_string())
+}
+
+/// Typed recovery words checked: `{"ok", "say"}`.
+///
+/// # Safety
+/// `text` is a NUL-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rd_recovery_check(text: *const c_char) -> *mut c_char {
+    out(api::recovery_check(&unsafe { arg(text) }).to_string())
+}
+
+/// Recovers from the words (takes minutes): `{"text"}` (what came back) or `{"error"}`.
+///
+/// # Safety
+/// `text` is a NUL-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rd_recovery_restore(text: *const c_char) -> *mut c_char {
+    let v = match api::recovery_restore(&unsafe { arg(text) }) {
+        Ok(r) => {
+            let libs: Vec<String> = r["libraries"].as_array().into_iter().flatten().filter_map(|w| w.as_str().map(String::from)).collect();
+            let text = if libs.is_empty() {
+                "The keyring lists no library this device doesn't have.".to_string()
+            } else {
+                format!("Back on this device: {}. Their content arrives in the background. In each library, remove the devices you lost (Members…).", libs.join(", "))
+            };
+            serde_json::json!({ "text": text })
+        }
+        Err(e) => serde_json::json!({ "error": e }),
+    };
+    out(v.to_string())
+}

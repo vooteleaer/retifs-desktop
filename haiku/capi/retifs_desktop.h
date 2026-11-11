@@ -47,6 +47,11 @@ char* rd_service(const char* name, const char* action);   /* start, stop, restar
 /* The status icon, size x size ARGB pixels (alpha in the top byte). */
 void rd_icon(int size, const char* health, unsigned int* pixels);
 
+/* The recovery kit (retifs ADR-0033). */
+char* rd_recovery_create(void);                /* {"text", "covers"} or {"error"}: the words shown once */
+char* rd_recovery_check(const char* text);     /* {"ok", "say"} */
+char* rd_recovery_restore(const char* text);   /* {"text"} or {"error"}; takes minutes */
+
 void rd_free(char* s);
 
 #ifdef __cplusplus

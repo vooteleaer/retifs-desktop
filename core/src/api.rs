@@ -51,6 +51,27 @@ pub fn open_link(link: &str) -> Result<String, String> {
     Ok(ns)
 }
 
+/// Makes the recovery kit: `{ "words": [...], "covered": [...], "not_covered": [...] }`.
+pub fn recovery_create() -> Result<Value, String> {
+    let k = Daemon::new().recovery_create()?;
+    Ok(json!({ "words": k.words, "covered": k.covered, "not_covered": k.not_covered }))
+}
+
+/// Checks typed recovery words: `{ "ok": bool, "say": "…" }`.
+pub fn recovery_check(text: &str) -> Value {
+    match crate::check_recovery_words(text) {
+        Ok(_) => json!({ "ok": true, "say": "The words check out." }),
+        Err(e) => json!({ "ok": false, "say": e }),
+    }
+}
+
+/// Recovers from the words (blocks for minutes): `{ "libraries": [...] }`.
+pub fn recovery_restore(text: &str) -> Result<Value, String> {
+    let words = crate::check_recovery_words(text)?;
+    let libraries = Daemon::new().recovery_restore(&words)?;
+    Ok(json!({ "libraries": libraries }))
+}
+
 pub fn leave(ns: &str) -> Result<(), String> {
     Daemon::new().leave(ns)
 }

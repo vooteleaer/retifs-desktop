@@ -26,6 +26,8 @@ pub struct DevicePage {
 impl DevicePage {
     pub fn new(daemon: Arc<Daemon>) -> Rc<DevicePage> {
         let page = adw::PreferencesPage::new();
+        // First: what matters most to do once.
+        page.add(&crate::recovery::group(daemon.clone()));
 
         let reticulum = adw::PreferencesGroup::builder()
             .title("Reticulum")
@@ -128,15 +130,8 @@ impl DevicePage {
     }
 
     fn show_reticulum(self: &Rc<Self>, r: &Reticulum, configured: Vec<Configured>) {
-        let bin = r.prnsd.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "not found".into());
-        if r.running {
-            let up = r.uptime_s.map(|s| if s > 86_400.0 { format!("{:.0} d", s / 86_400.0) } else { format!("{:.0} h", s / 3600.0) }).unwrap_or_default();
-            self.shared.set_title("Running");
-            self.shared.set_subtitle(&format!("transport {} · up {up} · {bin}", r.transport_id.clone().unwrap_or_default()));
-        } else {
-            self.shared.set_title("Not running");
-            self.shared.set_subtitle(&format!("{} · {bin}", r.error.clone().unwrap_or_default()));
-        }
+        self.shared.set_title(if r.running { "Running" } else { "Not running" });
+        self.shared.set_subtitle(&device::summary(r));
         for w in self.connection_rows.borrow_mut().drain(..) {
             self.connections.remove(&w);
         }

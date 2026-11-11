@@ -63,6 +63,12 @@ object Core {
     external fun calendarSave(event: String, before: String): String
     external fun calendarDelete(ns: String, id: String): String
     external fun leave(ns: String): String
+    /** The recovery kit (ADR-0033): `{words, covered, not_covered}` or `{error}`. */
+    external fun recoveryCreate(): String
+    /** Typed recovery words checked: `{ok, say}`. */
+    external fun recoveryCheck(text: String): String
+    /** Recovers from the words (takes minutes): `{libraries}` or `{error}`. */
+    external fun recoveryRestore(text: String): String
     /** Deletes a library on every member's device (retifs ADR-0034; only one who may invite). */
     external fun deleteLibrary(ns: String): String
     /** A new library; `purposes` what it's for, "contacts,calendar" (ADR-0032; "": generic). */

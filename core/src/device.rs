@@ -1,6 +1,11 @@
 //! This device: Reticulum (the shared instance retifs runs on), the
-//! services, and the node's settings. Reticulum is asked through `prnsd`'s
-//! own command line (`status --json`, `interfaces …`); the services are
+//! services, and the node's settings. Any Reticulum implementation that
+//! offers a shared instance will do (Python's `rnsd`, Prns's `prnsd`, …):
+//! whether it runs is asked of the shared instance itself, and its
+//! connections are read and changed in Reticulum's own configuration file,
+//! which every implementation reads. Where `prnsd`'s command line is there,
+//! it's used besides: per-interface traffic, and changes applied live. The
+//! services are
 //! systemd user units on Linux (the .deb's; from the Flatpak, the host's
 //! through `flatpak-spawn --host`) and, on Windows, processes the
 //! utility itself starts at login (the installer's); the settings are the
@@ -30,7 +35,7 @@ impl Interface {
 /// Reticulum on this machine.
 #[derive(Debug, Clone, Default)]
 pub struct Reticulum {
-    /// The prnsd found to ask (Prns's own).
+    /// A `prnsd` found to ask for details (Prns's), if there is one.
     pub prnsd: Option<PathBuf>,
     /// A shared instance answered.
     pub running: bool,
@@ -97,19 +102,177 @@ pub fn parse_status(json: &str) -> Result<Reticulum, String> {
     })
 }
 
-/// Asks the shared instance how it is.
+/// What's said when no shared instance answers.
+pub const NO_SHARED_INSTANCE: &str = "no Reticulum shared instance is running (start Prns, rnsd or another Reticulum)";
+
+/// Set once connections were changed in the configuration file with no
+/// way to apply them live: the shared instance must be restarted.
+static CHANGED_UNAPPLIED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Asks the shared instance how it is: whether it answers, and with
+/// `prnsd`'s command line, its interfaces and their traffic too.
 pub fn reticulum() -> Reticulum {
-    let Some(bin) = prnsd() else {
-        return Reticulum { error: Some("prnsd not found (install the retifs package, or prnsd)".into()), ..Default::default() };
+    let mut r = match prnsd() {
+        Some(bin) => {
+            let out = prnsd_command(&bin).args(["status", "--json"]).output();
+            let mut r = match out {
+                Ok(o) if o.status.success() => parse_status(&String::from_utf8_lossy(&o.stdout)).unwrap_or_else(|e| Reticulum { error: Some(e), ..Default::default() }),
+                _ => Reticulum::default(),
+            };
+            r.prnsd = Some(bin);
+            r
+        }
+        None => Reticulum::default(),
     };
-    let out = prnsd_command(&bin).args(["status", "--json"]).output();
-    let mut r = match out {
-        Ok(o) if o.status.success() => parse_status(&String::from_utf8_lossy(&o.stdout)).unwrap_or_else(|e| Reticulum { error: Some(e), ..Default::default() }),
-        Ok(o) => Reticulum { error: Some(first_line(&o.stderr, "no Reticulum shared instance is running")), ..Default::default() },
-        Err(e) => Reticulum { error: Some(e.to_string()), ..Default::default() },
-    };
-    r.prnsd = Some(bin);
+    // Whatever implementation runs it: the shared instance answers or not.
+    if !r.running {
+        r.running = shared_instance_up();
+        r.error = None;
+    }
+    if !r.running {
+        r.error = Some(NO_SHARED_INSTANCE.into());
+    } else if CHANGED_UNAPPLIED.load(std::sync::atomic::Ordering::Relaxed) {
+        r.error = Some("connections changed: restart Reticulum to use them".into());
+    }
     r
+}
+
+/// One line saying how Reticulum is, whichever implementation runs it:
+/// details where they're known, and the configuration file in use.
+pub fn summary(r: &Reticulum) -> String {
+    if !r.running {
+        return r.error.clone().unwrap_or_else(|| NO_SHARED_INSTANCE.into());
+    }
+    let mut parts = Vec::new();
+    if let Some(t) = &r.transport_id {
+        parts.push(format!("transport {t}"));
+    }
+    if let Some(s) = r.uptime_s {
+        parts.push(if s > 86_400.0 { format!("up {:.0} d", s / 86_400.0) } else { format!("up {:.0} h", s / 3600.0) });
+    }
+    if let Some(e) = &r.error {
+        parts.push(e.clone());
+    }
+    if parts.is_empty() {
+        parts.push("a shared instance answers".into());
+    }
+    parts.push(format!("configuration {}", config_path().display()));
+    parts.join(" · ")
+}
+
+/// Reticulum's configuration file, where every implementation looks for
+/// it: `/etc/reticulum/config`, `~/.config/reticulum/config`, then
+/// `~/.reticulum/config` (made there if none exists).
+pub fn config_path() -> PathBuf {
+    let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).map(PathBuf::from).unwrap_or_default();
+    let mut candidates = Vec::new();
+    if cfg!(unix) {
+        candidates.push(PathBuf::from("/etc/reticulum/config"));
+    }
+    candidates.push(home.join(".config").join("reticulum").join("config"));
+    let fallback = home.join(".reticulum").join("config");
+    candidates.push(fallback.clone());
+    candidates.into_iter().find(|p| p.is_file()).unwrap_or(fallback)
+}
+
+/// The `[[name]]` sections under `[interfaces]` in a Reticulum
+/// configuration (ConfigObj): name, `type`, and `enabled` (or the older
+/// `interface_enabled`; on when unset).
+pub fn parse_config_interfaces(text: &str) -> Vec<Configured> {
+    let mut out: Vec<Configured> = Vec::new();
+    let mut in_interfaces = false;
+    for line in text.lines() {
+        let t = line.trim();
+        if t.starts_with('#') || t.is_empty() {
+            continue;
+        }
+        if t.starts_with("[[") {
+            if in_interfaces {
+                out.push(Configured { name: t.trim_start_matches('[').trim_end_matches(']').trim().to_string(), kind: String::new(), enabled: true });
+            }
+            continue;
+        }
+        if t.starts_with('[') {
+            in_interfaces = t.trim_matches(|c| c == '[' || c == ']').trim() == "interfaces";
+            continue;
+        }
+        let (Some(last), Some((k, v))) = (out.last_mut().filter(|_| in_interfaces), t.split_once('=')) else { continue };
+        let (k, v) = (k.trim(), v.trim().trim_matches('"'));
+        match k {
+            "type" => last.kind = v.to_string(),
+            "enabled" | "interface_enabled" => last.enabled = matches!(v.to_lowercase().as_str(), "yes" | "true" | "on" | "1"),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// The configuration with a TCP client interface added under `[interfaces]`.
+pub fn config_add_tcp(text: &str, name: &str, host: &str, port: u16) -> Result<String, String> {
+    if parse_config_interfaces(text).iter().any(|c| c.name == name) {
+        return Err(format!("there's a connection named {name} already"));
+    }
+    let block = format!("  [[{name}]]\n    type = TCPClientInterface\n    enabled = yes\n    target_host = {host}\n    target_port = {port}\n");
+    let lines: Vec<&str> = text.lines().collect();
+    let Some(start) = lines.iter().position(|l| l.trim() == "[interfaces]") else {
+        let sep = if text.is_empty() || text.ends_with('\n') { "" } else { "\n" };
+        return Ok(format!("{text}{sep}\n[interfaces]\n{block}"));
+    };
+    // Before the next top-level section, or at the end.
+    let end = lines[start + 1..].iter().position(|l| { let t = l.trim(); t.starts_with('[') && !t.starts_with("[[") }).map_or(lines.len(), |i| start + 1 + i);
+    let mut out: Vec<String> = lines[..end].iter().map(|l| l.to_string()).collect();
+    out.push(block.trim_end().to_string());
+    out.extend(lines[end..].iter().map(|l| l.to_string()));
+    Ok(out.join("\n") + "\n")
+}
+
+/// The lines of interface `name`'s section: from its `[[name]]` to the next section.
+fn section_span(lines: &[&str], name: &str) -> Option<(usize, usize)> {
+    let start = lines.iter().position(|l| l.trim().starts_with("[[") && l.trim().trim_start_matches('[').trim_end_matches(']').trim() == name)?;
+    let end = lines[start + 1..].iter().position(|l| l.trim().starts_with('[')).map_or(lines.len(), |i| start + 1 + i);
+    Some((start, end))
+}
+
+/// The configuration with interface `name` switched on or off.
+pub fn config_set_enabled(text: &str, name: &str, enabled: bool) -> Result<String, String> {
+    let lines: Vec<&str> = text.lines().collect();
+    let (start, end) = section_span(&lines, name).ok_or_else(|| format!("no connection named {name}"))?;
+    let value = if enabled { "yes" } else { "no" };
+    let mut out: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
+    let mut set = false;
+    for line in out.iter_mut().take(end).skip(start + 1) {
+        let key = line.trim().split('=').next().unwrap_or("").trim().to_string();
+        if key == "enabled" || key == "interface_enabled" {
+            let indent: String = line.chars().take_while(|c| c.is_whitespace()).collect();
+            *line = format!("{indent}{key} = {value}");
+            set = true;
+        }
+    }
+    if !set {
+        out.insert(start + 1, format!("    enabled = {value}"));
+    }
+    Ok(out.join("\n") + "\n")
+}
+
+/// The configuration without interface `name`.
+pub fn config_remove(text: &str, name: &str) -> Result<String, String> {
+    let lines: Vec<&str> = text.lines().collect();
+    let (start, end) = section_span(&lines, name).ok_or_else(|| format!("no connection named {name}"))?;
+    let out: Vec<&str> = lines[..start].iter().chain(lines[end..].iter()).copied().collect();
+    Ok(out.join("\n") + "\n")
+}
+
+/// Changes Reticulum's configuration file with `edit` (no `prnsd` to do it live).
+fn edit_config(edit: impl FnOnce(&str) -> Result<String, String>) -> Result<(), String> {
+    let path = config_path();
+    let text = std::fs::read_to_string(&path).unwrap_or_default();
+    let new = edit(&text)?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    }
+    std::fs::write(&path, new).map_err(|e| format!("{}: {e}", path.display()))?;
+    CHANGED_UNAPPLIED.store(true, std::sync::atomic::Ordering::Relaxed);
+    Ok(())
 }
 
 fn first_line(bytes: &[u8], or: &str) -> String {
@@ -138,9 +301,13 @@ pub fn parse_list(text: &str) -> Vec<Configured> {
 
 /// The interfaces in the Reticulum configuration, enabled or not.
 pub fn configured() -> Result<Vec<Configured>, String> {
-    let bin = prnsd().ok_or("prnsd not found")?;
-    let o = prnsd_command(&bin).args(["interfaces", "list"]).output().map_err(|e| e.to_string())?;
-    if o.status.success() { Ok(parse_list(&String::from_utf8_lossy(&o.stdout))) } else { Err(first_line(&o.stderr, "prnsd interfaces list failed")) }
+    if let Some(bin) = prnsd() {
+        let o = prnsd_command(&bin).args(["interfaces", "list"]).output().map_err(|e| e.to_string())?;
+        if o.status.success() {
+            return Ok(parse_list(&String::from_utf8_lossy(&o.stdout)));
+        }
+    }
+    Ok(parse_config_interfaces(&std::fs::read_to_string(config_path()).unwrap_or_default()))
 }
 
 fn run_prnsd(args: &[&str]) -> Result<(), String> {
@@ -191,15 +358,24 @@ const HAIKU_PRNSD_START: &str = "/boot/system/apps/Prns/prnsd-start";
 
 /// Adds a TCP connection to another Reticulum node.
 pub fn add_tcp(name: &str, host: &str, port: u16) -> Result<(), String> {
+    if prnsd().is_none() {
+        return edit_config(|t| config_add_tcp(t, name, host, port));
+    }
     let port = port.to_string();
     reconfigure(&["interfaces", "add", "TCPClientInterface", "--name", name, "--target-host", host, "--target-port", &port])
 }
 
 pub fn set_interface(name: &str, enabled: bool) -> Result<(), String> {
+    if prnsd().is_none() {
+        return edit_config(|t| config_set_enabled(t, name, enabled));
+    }
     reconfigure(&["interfaces", if enabled { "enable" } else { "disable" }, name])
 }
 
 pub fn remove_interface(name: &str) -> Result<(), String> {
+    if prnsd().is_none() {
+        return edit_config(|t| config_remove(t, name));
+    }
     reconfigure(&["interfaces", "remove", name, "--yes"])
 }
 
@@ -207,14 +383,14 @@ pub fn remove_interface(name: &str) -> Result<(), String> {
 #[cfg(not(any(windows, target_os = "haiku")))]
 pub const SERVICES: &[(&str, &str)] = &[("retifsd.service", "retifs daemon"), ("retifs-gateway.service", "Libraries as local websites")];
 /// On Windows: the programs next to the utility, which it starts itself.
-/// Reticulum is Prns's (or another shared instance), not one of them.
+/// Reticulum is whatever shared instance runs, not one of them.
 #[cfg(windows)]
 pub const SERVICES: &[(&str, &str)] = &[("retifsd", "retifs daemon"), ("retifs-cloudfiles", "Libraries in Explorer")];
 /// On Haiku: launch_daemon jobs of the user's (`~/config/settings/launch/retifs`,
 /// or a package's `data/user_launch`), started at login; Reticulum is the
 /// Prns package's.
 #[cfg(target_os = "haiku")]
-pub const SERVICES: &[(&str, &str)] = &[("x-vnd.retifs-daemon", "retifs daemon"), ("x-vnd.prns-prnsd", "Reticulum (Prns)")];
+pub const SERVICES: &[(&str, &str)] = &[("x-vnd.retifs-daemon", "retifs daemon"), ("x-vnd.prns-prnsd", "Reticulum")];
 
 /// The service retifs itself runs as.
 pub const RETIFSD: &str = SERVICES[0].0;
@@ -874,6 +1050,50 @@ pub fn typed_setting(key: &str, what: &str, typed: &str, default: Option<&str>) 
 
 #[cfg(test)]
 mod tests {
+
+    /// Reticulum's own configuration, as Python's rnsd and prnsd both read it.
+    #[test]
+    fn reticulum_config_read_and_changed() {
+        let text = "[reticulum]
+  share_instance = Yes
+
+[interfaces]
+  [[Default Interface]]
+    type = AutoInterface
+    interface_enabled = True
+
+  [[RTR-3]]
+    type = TCPClientInterface
+    enabled = no
+    target_host = 10.0.0.1
+    target_port = 4242
+
+[logging]
+  loglevel = 4
+";
+        let list = parse_config_interfaces(text);
+        assert_eq!(list, [
+            Configured { name: "Default Interface".into(), kind: "AutoInterface".into(), enabled: true },
+            Configured { name: "RTR-3".into(), kind: "TCPClientInterface".into(), enabled: false },
+        ]);
+        let added = config_add_tcp(text, "hub", "hub.example", 4242).unwrap();
+        let after = parse_config_interfaces(&added);
+        assert_eq!(after.len(), 3);
+        assert_eq!(after[2], Configured { name: "hub".into(), kind: "TCPClientInterface".into(), enabled: true });
+        assert!(added.find("[[hub]]").unwrap() < added.find("[logging]").unwrap(), "added inside [interfaces]");
+        assert!(config_add_tcp(&added, "hub", "x", 1).is_err());
+        let on = config_set_enabled(&added, "RTR-3", true).unwrap();
+        assert!(parse_config_interfaces(&on).iter().all(|c| c.enabled));
+        let gone = config_remove(&on, "RTR-3").unwrap();
+        assert_eq!(parse_config_interfaces(&gone).iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["Default Interface", "hub"]);
+        assert!(gone.contains("[logging]") && gone.contains("loglevel = 4"));
+        // No [interfaces] yet: one is made.
+        let fresh = config_add_tcp("[reticulum]
+  share_instance = Yes
+", "hub", "h", 1).unwrap();
+        assert_eq!(parse_config_interfaces(&fresh).len(), 1);
+    }
+
     use super::*;
 
     const FILE: &str = "# retifs node settings.\n\n[store]\n# max_store = \"...\"          # store limit\n# no_storage = false         # keep nothing\n\n[node]\n# device = \"...\"             # this device's name\n";

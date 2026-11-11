@@ -317,7 +317,7 @@ fun Reticulum(up: Boolean) {
             when {
                 up -> "Reticulum is running"
                 prns != null -> "Reticulum isn't running: start it in Prns"
-                else -> "Reticulum isn't running: install Prns"
+                else -> "Reticulum isn't running: start a Reticulum app with a shared instance (Prns or another)"
             },
             Modifier.weight(1f),
             style = MaterialTheme.typography.bodyMedium,
@@ -342,6 +342,7 @@ fun SettingsView(said: (String) -> Unit) {
         }
     }
     LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        item { RecoveryCard(said) }
         item { Text("This node's retifs.toml, filled with the defaults this device gets until you change them.", style = MaterialTheme.typography.bodySmall) }
         items((0 until list.length()).map { list.getJSONObject(it) }) { s ->
             val id = "${s.getString("section")}.${s.getString("key")}"

@@ -41,6 +41,7 @@
 #include <TextControl.h>
 #include <TextView.h>
 #include <Window.h>
+#include <thread>
 #include <image.h>
 
 #include <Json.h>
@@ -95,6 +96,13 @@ enum {
 	kRemove = 'remv',
 	kAddTcp = 'addt',
 	kSave = 'save',
+	kKitMake = 'kitm',		// the recovery kit (ADR-0033): asked first
+	kKitMade = 'kitd',		// window: the kit ("kit": {"text", "covers"} or {"error"})
+	kKitWritten = 'kitw',	// its window: the words written down (the checkbox)
+	kRecoverOpen = 'reco',	// recover from a kit
+	kRecoverTyped = 'rect',	// its window: the words changed
+	kRecoverGo = 'recg',
+	kRecovered = 'recd',	// window: the outcome ("result": {"text"} or {"error"})
 };
 
 
@@ -815,6 +823,170 @@ private:
 };
 
 
+// #pragma mark - Recovery kit
+
+
+/*! The words of a new recovery kit, until the user says they wrote them
+	down: they aren't shown again. */
+class KitWindow : public BWindow {
+public:
+	KitWindow(const char* text, const char* covers)
+		:
+		BWindow(BRect(0, 0, 520, 360), "Your recovery kit", B_TITLED_WINDOW,
+			B_AUTO_UPDATE_SIZE_LIMITS | B_NOT_ZOOMABLE | B_NOT_RESIZABLE)
+	{
+		BTextView* words = new BTextView("words");
+		words->SetText(text);
+		words->SetFontAndColor(be_fixed_font);
+		words->MakeEditable(false);
+		words->SetExplicitMinSize(BSize(470, 120));
+		BTextView* intro = new BTextView("intro");
+		intro->SetText("Write these 24 words down on paper, in order, and keep "
+			"the paper somewhere safe. They won't be shown again.");
+		intro->MakeEditable(false);
+		intro->SetViewUIColor(B_PANEL_BACKGROUND_COLOR);
+		BTextView* cover = new BTextView("covers");
+		cover->SetText(covers);
+		cover->MakeEditable(false);
+		cover->SetViewUIColor(B_PANEL_BACKGROUND_COLOR);
+		fWritten = new BCheckBox("I have written the 24 words down, in order",
+			new BMessage(kKitWritten));
+		fDone = new BButton("Done", new BMessage(B_QUIT_REQUESTED));
+		fDone->SetEnabled(false);
+		BLayoutBuilder::Group<>(this, B_VERTICAL)
+			.SetInsets(B_USE_WINDOW_SPACING)
+			.Add(intro)
+			.Add(words)
+			.Add(cover)
+			.Add(fWritten)
+			.AddGroup(B_HORIZONTAL)
+				.AddGlue()
+				.Add(fDone)
+			.End();
+		CenterOnScreen();
+	}
+
+	void MessageReceived(BMessage* message)
+	{
+		if (message->what == kKitWritten) {
+			fDone->SetEnabled(fWritten->Value() == B_CONTROL_ON);
+			return;
+		}
+		BWindow::MessageReceived(message);
+	}
+
+	bool QuitRequested()
+	{
+		if (fWritten->Value() == B_CONTROL_ON)
+			return true;
+		BAlert* ask = new BAlert("retifs", "These words won't be shown again. "
+			"Close without them?", "Keep them open", "Close", NULL,
+			B_WIDTH_AS_USUAL, B_WARNING_ALERT);
+		return ask->Go() == 1;
+	}
+
+private:
+	BCheckBox* fWritten;
+	BButton* fDone;
+};
+
+
+/*! A text view that tells its window when its text changes. */
+class TypedView : public BTextView {
+public:
+	TypedView(const char* name) : BTextView(name) {}
+
+protected:
+	void InsertText(const char* text, int32 length, int32 offset,
+		const text_run_array* runs)
+	{
+		BTextView::InsertText(text, length, offset, runs);
+		if (Window() != NULL)
+			Window()->PostMessage(kRecoverTyped);
+	}
+
+	void DeleteText(int32 from, int32 to)
+	{
+		BTextView::DeleteText(from, to);
+		if (Window() != NULL)
+			Window()->PostMessage(kRecoverTyped);
+	}
+};
+
+
+/*! The recovery words typed and checked as they come; the recovery itself
+	runs on a thread of its own (minutes) and answers the main window. */
+class RecoverWindow : public BWindow {
+public:
+	RecoverWindow(BMessenger target)
+		:
+		BWindow(BRect(0, 0, 520, 300), "Recover from a kit", B_TITLED_WINDOW,
+			B_AUTO_UPDATE_SIZE_LIMITS | B_NOT_ZOOMABLE | B_NOT_RESIZABLE
+				| B_CLOSE_ON_ESCAPE),
+		fTarget(target)
+	{
+		BTextView* intro = new BTextView("intro");
+		intro->SetText("Type your 24 words, in order. A device of yours that "
+			"keeps your keyring must be running somewhere on the network.");
+		intro->MakeEditable(false);
+		intro->SetViewUIColor(B_PANEL_BACKGROUND_COLOR);
+		fWords = new TypedView("words");
+		fWords->SetFontAndColor(be_fixed_font);
+		fWords->SetExplicitMinSize(BSize(470, 110));
+		fSay = new BStringView("say", "0 of 24 words");
+		fGo = new BButton("Recover", new BMessage(kRecoverGo));
+		fGo->SetEnabled(false);
+		BLayoutBuilder::Group<>(this, B_VERTICAL)
+			.SetInsets(B_USE_WINDOW_SPACING)
+			.Add(intro)
+			.Add(new BScrollView("scroll", fWords, 0, false, true))
+			.Add(fSay)
+			.AddGroup(B_HORIZONTAL)
+				.AddGlue()
+				.Add(new BButton("Cancel", new BMessage(B_QUIT_REQUESTED)))
+				.Add(fGo)
+			.End();
+		fWords->MakeFocus(true);
+		CenterOnScreen();
+	}
+
+	void MessageReceived(BMessage* message)
+	{
+		switch (message->what) {
+			case kRecoverTyped:
+			{
+				BMessage check = Take(rd_recovery_check(fWords->Text()));
+				fSay->SetText(check.GetString("say", ""));
+				fGo->SetEnabled(check.GetBool("ok", false));
+				return;
+			}
+			case kRecoverGo:
+			{
+				BString text(fWords->Text());
+				BMessenger target = fTarget;
+				std::thread([text, target]() {
+					BMessage result = Take(rd_recovery_restore(text.String()));
+					BMessage done(kRecovered);
+					done.AddMessage("result", &result);
+					target.SendMessage(&done);
+				}).detach();
+				// It takes minutes: the main window says so meanwhile.
+				fTarget.SendMessage(kRecoverGo);
+				Quit();
+				return;
+			}
+		}
+		BWindow::MessageReceived(message);
+	}
+
+private:
+	BMessenger fTarget;
+	TypedView* fWords;
+	BStringView* fSay;
+	BButton* fGo;
+};
+
+
 // #pragma mark - Window
 
 
@@ -962,6 +1134,60 @@ public:
 				be_clipboard->Unlock();
 				break;
 			}
+			case kKitMake:
+			{
+				BAlert* ask = new BAlert("Make a recovery kit?",
+					"A recovery kit is 24 words that bring all your libraries "
+					"back on a new device if you lose every device you have. "
+					"You write them down on paper once; they are shown only now "
+					"and kept nowhere. Whoever has them can open every library "
+					"of yours, so keep them as you'd keep a key to your home.",
+					"Cancel", "Make kit", NULL, B_WIDTH_AS_USUAL, B_INFO_ALERT);
+				if (ask->Go() != 1)
+					break;
+				BMessenger target(this);
+				std::thread([target]() {
+					BMessage kit = Take(rd_recovery_create());
+					BMessage made(kKitMade);
+					made.AddMessage("kit", &kit);
+					target.SendMessage(&made);
+				}).detach();
+				break;
+			}
+			case kKitMade:
+			{
+				BMessage kit;
+				message->FindMessage("kit", &kit);
+				if (kit.HasString("error")) {
+					(new BAlert("retifs", kit.GetString("error", ""), "OK", NULL,
+						NULL, B_WIDTH_AS_USUAL, B_WARNING_ALERT))->Go(NULL);
+					break;
+				}
+				(new KitWindow(kit.GetString("text", ""),
+					kit.GetString("covers", "")))->Show();
+				break;
+			}
+			case kRecoverOpen:
+				(new RecoverWindow(BMessenger(this)))->Show();
+				break;
+			case kRecoverGo:
+				(new BAlert("retifs", "Recovering: looking for a device of yours "
+					"that keeps your keyring, then bringing each library back. "
+					"This can take several minutes; you'll be told when it's done.",
+					"OK", NULL, NULL, B_WIDTH_AS_USUAL, B_INFO_ALERT))->Go(NULL);
+				break;
+			case kRecovered:
+			{
+				BMessage result;
+				message->FindMessage("result", &result);
+				bool failed = result.HasString("error");
+				BString text(failed ? "Not recovered: " : "");
+				text << result.GetString(failed ? "error" : "text", "");
+				(new BAlert("retifs", text.String(), "OK", NULL, NULL,
+					B_WIDTH_AS_USUAL, failed ? B_WARNING_ALERT : B_INFO_ALERT))
+					->Go(NULL);
+				break;
+			}
 			case kNewLibrary:
 				(new NewLibraryWindow(BMessenger(this)))->Show();
 				break;
@@ -1081,6 +1307,11 @@ private:
 				.Add(new BButton("Start", new BMessage(kStart)))
 				.Add(new BButton("Restart", new BMessage(kRestart)))
 				.Add(new BButton("Stop", new BMessage(kStop)))
+				.AddGlue()
+			.End()
+			.AddGroup(B_HORIZONTAL)
+				.Add(new BButton("Recovery kit" B_UTF8_ELLIPSIS, new BMessage(kKitMake)))
+				.Add(new BButton("Recover from a kit" B_UTF8_ELLIPSIS, new BMessage(kRecoverOpen)))
 				.AddGlue()
 			.End()
 			.Add(new BSeparatorView(B_HORIZONTAL))

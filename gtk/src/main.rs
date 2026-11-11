@@ -8,6 +8,7 @@
 mod device;
 mod find;
 mod library;
+mod recovery;
 #[cfg(target_os = "linux")]
 mod tray;
 
@@ -529,8 +530,8 @@ fn reload(me: &Rc<App>) {
         if !OPENED.with(|o| o.replace(true)) {
             match std::env::var("RETIFS_DESKTOP_OPEN").ok().as_deref() {
                 Some(o) if o.starts_with("lib:") => open_ns(&me2, &o[4..]),
-                Some("announces") => {
-                    if let Some(row) = me2.side_top.row_at_index(3) {
+                Some(page @ ("announces" | "device")) => {
+                    if let Some(row) = me2.side_top.row_at_index(if page == "device" { 2 } else { 3 }) {
                         me2.side_top.select_row(Some(&row));
                         row.activate();
                     }

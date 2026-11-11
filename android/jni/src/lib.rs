@@ -442,3 +442,25 @@ pub extern "system" fn Java_org_retifs_desktop_Core_appConnect<'l>(mut env: JNIE
         }
     }
 }
+
+/// The recovery kit (retifs ADR-0033): `{words, covered, not_covered}` or `{"error"}`.
+#[no_mangle]
+pub extern "system" fn Java_org_retifs_desktop_Core_recoveryCreate<'l>(mut env: JNIEnv<'l>, _: JClass<'l>) -> jstring {
+    let v = api::recovery_create().unwrap_or_else(|e| serde_json::json!({ "error": e }));
+    out(&mut env, v.to_string())
+}
+
+/// Typed recovery words checked: `{ok, say}`.
+#[no_mangle]
+pub extern "system" fn Java_org_retifs_desktop_Core_recoveryCheck<'l>(mut env: JNIEnv<'l>, _: JClass<'l>, text: JString<'l>) -> jstring {
+    let text = arg(&mut env, &text);
+    out(&mut env, api::recovery_check(&text).to_string())
+}
+
+/// Recovers from the words (minutes): `{libraries}` or `{"error"}`.
+#[no_mangle]
+pub extern "system" fn Java_org_retifs_desktop_Core_recoveryRestore<'l>(mut env: JNIEnv<'l>, _: JClass<'l>, text: JString<'l>) -> jstring {
+    let text = arg(&mut env, &text);
+    let v = api::recovery_restore(&text).unwrap_or_else(|e| serde_json::json!({ "error": e }));
+    out(&mut env, v.to_string())
+}
