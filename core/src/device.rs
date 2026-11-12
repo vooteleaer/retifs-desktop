@@ -635,6 +635,10 @@ pub fn service_state(name: &str) -> Option<String> {
 pub fn service(name: &str, action: &str) -> Result<(), String> {
     use std::os::windows::process::CommandExt;
     let exe = format!("{name}.exe");
+    if name == "retifs-cloudfiles" {
+        // Stopped on purpose: `keep` leaves it stopped until started again.
+        CLOUDFILES_STOPPED.store(action == "stop", std::sync::atomic::Ordering::Relaxed);
+    }
     if action == "stop" || action == "restart" {
         // retifsd is asked to stop, so it closes its store (killed, its index
         // is checked at the next start: minutes on a large store); killed
@@ -709,6 +713,18 @@ pub fn supervise() -> Vec<String> {
 #[cfg(windows)]
 pub fn keep(away: &mut u32) -> Vec<String> {
     let mut did = Vec::new();
+    // The libraries in Explorer: started again if they stopped by themselves
+    // (a crash would otherwise leave Explorer's folders stale until the next login).
+    if running("retifsd.exe")
+        && !CLOUDFILES_STOPPED.load(std::sync::atomic::Ordering::Relaxed)
+        && install_dir().join("retifs-cloudfiles.exe").is_file()
+        && !running("retifs-cloudfiles.exe")
+    {
+        match service("retifs-cloudfiles", "start") {
+            Ok(()) => did.push("the libraries in Explorer had stopped: started them again".to_string()),
+            Err(e) => did.push(format!("retifs-cloudfiles: {e}")),
+        }
+    }
     let up = shared_instance_up();
     if up && *away >= 2 && running("retifsd.exe") {
         match service("retifsd", "restart") {
@@ -724,6 +740,10 @@ pub fn keep(away: &mut u32) -> Vec<String> {
     *away = if up { 0 } else { *away + 1 };
     did
 }
+
+/// Set while the user has stopped the libraries in Explorer (Windows).
+#[cfg(windows)]
+static CLOUDFILES_STOPPED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// The settings the utility offers, of `retifs.toml`'s: (section, key, what it is).
 pub const SETTINGS: [(&str, &str, &str); 7] = [

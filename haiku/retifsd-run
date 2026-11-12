@@ -1,0 +1,17 @@
+#!/bin/sh
+# retifsd as the launch_daemon job runs it on Haiku: its output in
+# ~/config/var/log/retifs/retifsd.log (kept under 10 MB; the older half moves
+# to retifsd.log.1), and started again 10 s after it ends. launch_daemon
+# keeps a job's output nowhere and doesn't restart a job, so a watchdog's
+# last words were lost and retifs stayed down (2026-11-12).
+HERE=$(cd "$(dirname "$0")" && pwd)
+L="$HOME/config/var/log/retifs"
+mkdir -p "$L"
+while true; do
+	if [ "$(stat -c %s "$L/retifsd.log" 2>/dev/null || echo 0)" -gt 10000000 ]; then
+		mv -f "$L/retifsd.log" "$L/retifsd.log.1"
+	fi
+	"$HERE/retifsd" >> "$L/retifsd.log" 2>&1
+	echo "retifsd ended with $?: starting it again in 10 s ($(date))" >> "$L/retifsd.log"
+	sleep 10
+done
