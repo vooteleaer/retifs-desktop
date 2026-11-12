@@ -419,7 +419,15 @@ fn show_link(me: &Rc<App>, link: &str) {
 /// Announces: the public libraries heard on the network, each with Join.
 pub fn announces_page(me: &Rc<App>) -> adw::PreferencesPage {
     let page = adw::PreferencesPage::new();
-    let group = adw::PreferencesGroup::builder().title("Heard on the network").description("Public libraries others announce. Joining fetches only what you look at.").build();
+    let join = gtk::Button::builder().label("Join with link…").build();
+    join.add_css_class("flat");
+    let me2 = me.clone();
+    join.connect_clicked(move |b| crate::ask_add_namespace(&me2, b.root().and_downcast(), true, ""));
+    let group = adw::PreferencesGroup::builder()
+        .title("Heard on the network")
+        .description("Public libraries others announce. Joining fetches only what you look at. A private one needs its link or an invitation.")
+        .header_suffix(&join)
+        .build();
     page.add(&group);
     *me.announces.borrow_mut() = Some(group);
     page

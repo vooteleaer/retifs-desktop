@@ -310,6 +310,23 @@ fn build(app: &adw::Application, hidden: bool) {
             ask_add_namespace(&me, b.root().and_downcast(), true, "");
         });
     }
+    // The same in words where the libraries are listed, and with the heard
+    // ones: the sidebar's "+" is only an icon, and a desktop without the
+    // icon theme shows nothing there.
+    {
+        let new = gtk::Button::builder().label("New library…").build();
+        let join = gtk::Button::builder().label("Join with link…").build();
+        let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        for b in [&new, &join] {
+            b.add_css_class("flat");
+            buttons.append(b);
+        }
+        me.overview.namespaces.set_header_suffix(Some(&buttons));
+        let me2 = me.clone();
+        new.connect_clicked(move |b| ask_add_namespace(&me2, b.root().and_downcast(), false, ""));
+        let me2 = me.clone();
+        join.connect_clicked(move |b| ask_add_namespace(&me2, b.root().and_downcast(), true, ""));
+    }
     {
         let me = me.clone();
         side_ns.connect_row_activated(move |_, row| {
