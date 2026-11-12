@@ -1,6 +1,6 @@
 //! retifs-desktop for Linux: native GTK 4 / libadwaita widgets over the
 //! shared core. A sidebar (overview, Find, saved searches, libraries), the
-//! overview, Find (a live query, as BeOS's Find), a namespace's management
+//! overview, Find (a live query, as BeOS's Find), a library's management
 //! page (sharing, members, what this device keeps, state), and a banner when
 //! the daemon isn't running. It finds, but doesn't browse or catalogue
 //! content: that's what apps such as a photo album are for.
@@ -193,7 +193,7 @@ fn build(app: &adw::Application, hidden: bool) {
     saved_head.add_css_class("caption-heading");
     let side_saved = gtk::ListBox::new();
     side_saved.add_css_class("navigation-sidebar");
-    // The interface's words (docs/plan.md): every namespace is a library;
+    // The interface's words (docs/plan.md): every library is a library;
     // one shared with others is marked: they're its club.
     let ns_head = gtk::Label::builder().label("Libraries").xalign(0.0).hexpand(true).build();
     ns_head.add_css_class("dim-label");
@@ -319,7 +319,7 @@ fn build(app: &adw::Application, hidden: bool) {
         });
     }
 
-    // The daemon's state every 5 s; namespaces again when it comes up, and
+    // The daemon's state every 5 s; libraries again when it comes up, and
     // every 30 s while it's up.
     let poll = {
         let (me, banner, was_up, ticks) = (me.clone(), banner.clone(), Rc::new(RefCell::new(false)), Rc::new(RefCell::new(0u32)));
@@ -539,7 +539,7 @@ fn reload(me: &Rc<App>) {
                 _ => {}
             }
         }
-        // A namespace on screen is redrawn with what's new.
+        // A library on screen is redrawn with what's new.
         let shown = me2.shown.borrow().clone();
         if let Some(name) = shown {
             show_ns(&me2, &name);
@@ -577,7 +577,7 @@ fn show_saved(me: &Rc<App>, saved: Vec<(SavedQuery, Vec<String>, usize)>) {
     }
 }
 
-/// A new library (a namespace of the user's: just a name), or `join`: a
+/// A new library (a library of the user's: just a name), or `join`: a
 /// library from an invitation or link (as `retifs open`); `given`: a link
 /// opened from elsewhere, already in the field.
 fn ask_add_namespace(me: &Rc<App>, window: Option<gtk::Window>, join: bool, given: &str) {

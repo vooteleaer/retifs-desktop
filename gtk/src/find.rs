@@ -1,5 +1,5 @@
 //! Find: a live query, in the spirit of BeOS's Find in Tracker. Rows of
-//! attribute, condition and value over a scope of namespaces; the results
+//! attribute, condition and value over a scope of libraries; the results
 //! update as records change; a search can be saved (in `me`, so every device
 //! of the user's has it) and opened again from the sidebar.
 
@@ -37,12 +37,12 @@ struct Condition {
 pub struct Find {
     pub page: gtk::Box,
     daemon: Arc<Daemon>,
-    /// Waits for the search's namespaces to change, so the window's other
+    /// Waits for the search's libraries to change, so the window's other
     /// calls aren't held up meanwhile.
     watcher: Arc<Daemon>,
     scope: gtk::DropDown,
     scope_names: RefCell<Vec<String>>,
-    /// A saved query's own namespaces, until the scope is changed by hand.
+    /// A saved query's own libraries, until the scope is changed by hand.
     saved_scope: RefCell<Option<Vec<String>>>,
     scope_note: gtk::Label,
     conditions_box: gtk::ListBox,
@@ -141,7 +141,7 @@ impl Find {
         f
     }
 
-    /// The namespaces the scope menu offers.
+    /// The libraries the scope menu offers.
     pub fn set_namespaces(self: &Rc<Self>, names: Vec<String>) {
         if *self.scope_names.borrow() == names {
             return;
@@ -242,7 +242,7 @@ impl Find {
         });
     }
 
-    /// Live: when a namespace in scope changes, the search runs again.
+    /// Live: when a library in scope changes, the search runs again.
     /// retifsd says so the moment one does (`Daemon::wait_change`); a
     /// later run's watch takes over from this one.
     fn watch_changes(self: &Rc<Self>, run: u64, mut known: HashMap<String, u64>) {
@@ -253,7 +253,7 @@ impl Find {
         let f = self.clone();
         bg(&self.watcher, move |d| {
             let mut changed = d.wait_change(&mut known, std::time::Duration::from_secs(60));
-            // A namespace made or joined meanwhile (looking everywhere), or
+            // A library made or joined meanwhile (looking everywhere), or
             // one retifsd answers for again, is only seen by asking.
             if !changed && (scope.is_empty() || known.is_empty()) {
                 changed = d.change_counts(&scope).keys().any(|ns| !known.contains_key(ns));
@@ -284,7 +284,7 @@ impl Find {
         for h in hits.iter().take(1000) {
             let row = adw::ActionRow::builder().title(glib::markup_escape_text(&h.title())).subtitle(glib::markup_escape_text(&format!("{} · {}", h.ns, h.summary()))).build();
             row.set_subtitle_lines(2);
-            // Opening it: the file, where the namespace is mounted.
+            // Opening it: the file, where the library is mounted.
             if let Some(path) = h.path() {
                 let file = std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join("retifs").join(&h.ns).join(path.trim_start_matches('/')));
                 if let Some(file) = file.filter(|f| f.exists()) {
@@ -300,7 +300,7 @@ impl Find {
         }
     }
 
-    /// Opens a saved query: its conditions, its namespaces, and runs it.
+    /// Opens a saved query: its conditions, its libraries, and runs it.
     pub fn open_saved(self: &Rc<Self>, terms: &[String], scope: Vec<String>, missing: usize) {
         for c in self.conditions.borrow_mut().drain(..) {
             self.conditions_box.remove(&c.row);

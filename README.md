@@ -4,9 +4,9 @@ A desktop management utility for [retifs](https://github.com/vooteleaer/retifs),
 
 > A demo app of [retifs](https://github.com/vooteleaer/retifs), part of its test release. To try it, start with [getting started](https://github.com/vooteleaer/retifs/blob/main/docs/getting-started.md).
 
-It manages retifs (this node, storage, namespaces, sharing, devices); browsing content is left to apps.
+It manages retifs (this node, storage, libraries, sharing, devices); browsing content is left to apps.
 
-Status: milestones 1 and 2 on Linux (overview; each namespace's members, sharing address, what this device keeps). Plan: [docs/plan.md](docs/plan.md).
+Status: milestones 1 and 2 on Linux (overview; each library's members, sharing address, what this device keeps). Plan: [docs/plan.md](docs/plan.md).
 
 ## Build and run (Linux)
 Needs GTK 4 and libadwaita development files (`libgtk-4-dev libadwaita-1-dev` on Debian) and a running `retifsd`.

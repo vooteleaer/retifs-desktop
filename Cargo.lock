@@ -1208,7 +1208,7 @@ dependencies = [
 
 [[package]]
 name = "retifs-calendar-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "libretifs",
@@ -1217,7 +1217,7 @@ dependencies = [
 
 [[package]]
 name = "retifs-contacts-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "libretifs",
  "tokio",

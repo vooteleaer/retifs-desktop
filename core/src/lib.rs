@@ -1,7 +1,7 @@
 //! What every retifs-desktop front end shares (GTK on Linux, Windows, Android,
 //! Haiku): talking to the local `retifsd` through `libretifs`.
 //!
-//! The utility manages retifs (this node, storage, namespaces as units:
+//! The utility manages retifs (this node, storage, libraries as units:
 //! members, sharing, what's kept where, devices); it doesn't browse or
 //! catalogue content, which is what apps such as a photo album are for.
 //!
@@ -267,14 +267,14 @@ impl Daemon {
         self.request(&mut c, Request::NsDelete { ns: ns.into() }).map(|_| ())
     }
 
-    /// The namespaces a search may look in (all but `me`).
+    /// The libraries a search may look in (all but `me`).
     pub fn namespace_names(&self) -> Result<Vec<String>, String> {
         let mut c = self.client()?;
         self.rt.block_on(saved::namespaces(&mut c))
     }
 
     /// Records matching `terms` (as `retifs query` takes them) in `scope`
-    /// (namespace names; empty: every one but `me`).
+    /// (library names; empty: every one but `me`).
     pub fn find(&self, scope: &[String], terms: &[String]) -> Result<Vec<Hit>, String> {
         let mut c = self.client()?;
         let names = if scope.is_empty() { self.rt.block_on(saved::namespaces(&mut c))? } else { scope.to_vec() };
@@ -291,7 +291,7 @@ impl Daemon {
         Ok(out)
     }
 
-    /// Each namespace's change count (it grows when its records change):
+    /// Each library's change count (it grows when its records change):
     /// a front end runs a search again when these differ.
     pub fn change_counts(&self, scope: &[String]) -> HashMap<String, u64> {
         let Ok(mut c) = self.client() else { return HashMap::new() };
@@ -305,7 +305,7 @@ impl Daemon {
             .collect()
     }
 
-    /// Waits until one of the namespaces in `known` (with their change
+    /// Waits until one of the libraries in `known` (with their change
     /// counts) changes, for at most `timeout`: whether one did, its count in
     /// `known` brought up to date. retifsd answers the moment a change comes,
     /// so a front end waiting on this (on a thread, with a `Daemon` of its
@@ -336,7 +336,7 @@ impl Daemon {
     }
 
     /// The saved queries (in `me`, so every device of the user's has them),
-    /// each with the names its namespaces have here and how many aren't here.
+    /// each with the names its libraries have here and how many aren't here.
     pub fn saved(&self) -> Vec<(SavedQuery, Vec<String>, usize)> {
         let Ok(mut c) = self.client() else { return Vec::new() };
         let list = self.rt.block_on(saved::list(&mut c));
@@ -358,8 +358,8 @@ impl Daemon {
         self.rt.block_on(saved::remove(&mut c, name))
     }
 
-    /// Every namespace with its view (writers, peers, keep mode, checkpoint).
-    /// Followed channels' namespaces, which have no member view, are left out.
+    /// Every library with its view (writers, peers, keep mode, checkpoint).
+    /// Followed channels' libraries, which have no member view, are left out.
     pub fn namespaces(&self) -> Result<Vec<NsView>, String> {
         let mut c = self.client()?;
         let names = match self.rt.block_on(c.call(Request::Namespaces)).map_err(|e| e.to_string())? {
@@ -566,11 +566,11 @@ impl Daemon {
         self.request(&mut c, Request::NsRevoke { ns: ns.into(), writer: writer.into() }).map(|_| ())
     }
 
-    /// A new namespace of this user's, `name` (its keys are made here).
+    /// A new library of this user's, `name` (its keys are made here).
     pub fn create_namespace(&self, name: &str) -> Result<(), String> {
         let mut c = self.client()?;
         if self.rt.block_on(saved::namespaces(&mut c))?.iter().any(|n| n == name) {
-            return Err(format!("there is a namespace {name} already"));
+            return Err(format!("there is a library {name} already"));
         }
         match self.rt.block_on(c.call(Request::NsAddress { ns: name.into() })).map_err(|e| e.to_string())? {
             Response::Error { message } => Err(message),
@@ -666,14 +666,14 @@ impl Daemon {
         Ok(())
     }
 
-    /// The local name a namespace link or invitation suggests.
+    /// The local name a library link or invitation suggests.
     pub fn link_name(link: &str) -> Result<String, String> {
         let l = libretifs::link::Link::parse(link.trim()).map_err(|e| e.to_string())?;
         Ok(libretifs::link::suggest_name(l.param("name").unwrap_or("shared")))
     }
 
-    /// Joins the namespace a `retifs:` link names, as `retifs open` does: a
-    /// namespace link to read it, an invitation to write too.
+    /// Joins the library a `retifs:` link names, as `retifs open` does: a
+    /// library link to read it, an invitation to write too.
     pub fn open_link(&self, link: &str, name: &str) -> Result<(), String> {
         let text = link.trim();
         let l = libretifs::link::Link::parse(text).map_err(|e| e.to_string())?;
@@ -681,7 +681,7 @@ impl Daemon {
             "invite" => Request::InviteAccept { ns: name.into(), link: text.into() },
             _ => match l.ns_address() {
                 Some(address) => Request::NsJoin { ns: name.into(), address, from: l.params_named("from").map(String::from).collect(), lazy: false },
-                None => return Err(format!("a retifs:{} link, not a namespace", l.kind)),
+                None => return Err(format!("a retifs:{} link, not a library", l.kind)),
             },
         };
         let mut c = self.client()?;

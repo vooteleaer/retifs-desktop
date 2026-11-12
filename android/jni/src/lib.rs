@@ -259,7 +259,7 @@ pub extern "system" fn Java_org_retifs_desktop_Core_calendarEvents<'l>(mut env: 
     let r = match retifs_calendar_core::Calendar::new().events(&ns) {
         Ok(list) => serde_json::Value::Array(list.iter().map(event_json).collect()),
         // A library not here yet (`me` before anything was saved): none.
-        Err(e) if e.contains("no namespace") => serde_json::json!([]),
+        Err(e) if e.contains("no library") || e.contains("no namespace") => serde_json::json!([]),
         Err(e) => serde_json::json!({ "error": e }),
     };
     out(&mut env, r.to_string())
