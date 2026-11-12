@@ -2,9 +2,11 @@
 # Reticulum (x-vnd.prns-prnsd, the Prns package's prnsd). A package puts this
 # in data/user_launch/ (every user) with its own paths; by hand, copy it to
 # ~/config/settings/launch/retifs with APP replaced by the app folder, then
-# log in again.
+# log in again. Its output goes to ~/config/var/log/retifs/retifsd.log (kept
+# under 10 MB: the older half moves to retifsd.log.1): launch_daemon keeps a
+# job's output nowhere, and a watchdog's last words were lost (2026-11-12).
 
 job x-vnd.retifs-daemon {
-	launch APP/bin/retifsd
+	launch /bin/sh -c "L=$HOME/config/var/log/retifs; mkdir -p $L; [ $(stat -c %s $L/retifsd.log 2>/dev/null || echo 0) -gt 10000000 ] && mv -f $L/retifsd.log $L/retifsd.log.1; exec APP/bin/retifsd >> $L/retifsd.log 2>&1"
 	requires x-vnd.prns-prnsd
 }
