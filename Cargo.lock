@@ -1028,7 +1028,7 @@ checksum = "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
 
 [[package]]
 name = "libretifs"
-version = "0.5.0"
+version = "0.4.1"
 dependencies = [
  "libc",
  "rmp-serde",
@@ -1208,7 +1208,7 @@ dependencies = [
 
 [[package]]
 name = "retifs-calendar-core"
-version = "0.5.0"
+version = "0.4.1"
 dependencies = [
  "chrono",
  "libretifs",
@@ -1217,7 +1217,7 @@ dependencies = [
 
 [[package]]
 name = "retifs-contacts-core"
-version = "0.5.0"
+version = "0.4.1"
 dependencies = [
  "libretifs",
  "tokio",
@@ -1225,7 +1225,7 @@ dependencies = [
 
 [[package]]
 name = "retifs-core"
-version = "0.5.0"
+version = "0.4.1"
 dependencies = [
  "aes",
  "cbc",
@@ -1242,7 +1242,7 @@ dependencies = [
 
 [[package]]
 name = "retifs-desktop-capi"
-version = "0.5.0"
+version = "0.4.1"
 dependencies = [
  "retifs-desktop-core",
  "serde_json",
@@ -1250,7 +1250,7 @@ dependencies = [
 
 [[package]]
 name = "retifs-desktop-core"
-version = "0.5.0"
+version = "0.4.1"
 dependencies = [
  "fs4",
  "libretifs",
@@ -1262,7 +1262,7 @@ dependencies = [
 
 [[package]]
 name = "retifs-desktop-gtk"
-version = "0.5.0"
+version = "0.4.1"
 dependencies = [
  "async-channel",
  "gtk4",
@@ -1276,7 +1276,7 @@ dependencies = [
 
 [[package]]
 name = "retifs-desktop-jni"
-version = "0.5.0"
+version = "0.4.1"
 dependencies = [
  "jni",
  "retifs-calendar-core",
@@ -1287,7 +1287,7 @@ dependencies = [
 
 [[package]]
 name = "retifs-desktop-win"
-version = "0.5.0"
+version = "0.4.1"
 dependencies = [
  "retifs-desktop-core",
  "serde_json",
@@ -1296,7 +1296,7 @@ dependencies = [
 
 [[package]]
 name = "retifs-tree"
-version = "0.5.0"
+version = "0.4.1"
 dependencies = [
  "libretifs",
  "serde_json",
