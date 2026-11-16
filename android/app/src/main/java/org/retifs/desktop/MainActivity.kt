@@ -308,23 +308,15 @@ fun DaemonState(s: JSONObject, reticulum: Boolean) {
     }
 }
 
+/** Reticulum on this device: any implementation with a shared instance, none named. */
 @Composable
 fun Reticulum(up: Boolean) {
-    val context = LocalContext.current
-    val prns = context.packageManager.getLaunchIntentForPackage(RetifsService.PRNS_APP)
     Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(
-            when {
-                up -> "Reticulum is running"
-                prns != null -> "Reticulum isn't running: start it in Prns"
-                else -> "Reticulum isn't running: start a Reticulum app with a shared instance (Prns or another)"
-            },
+            if (up) "Reticulum is running" else "Reticulum isn't running: start your Reticulum app (one with a shared instance)",
             Modifier.weight(1f),
             style = MaterialTheme.typography.bodyMedium,
         )
-        if (prns != null) {
-            TextButton(onClick = { context.startActivity(prns) }) { Text("Open Prns") }
-        }
     }
 }
 

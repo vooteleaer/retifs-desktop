@@ -148,6 +148,9 @@ pub fn human(n: u64) -> String {
 }
 
 /// The connection to `retifsd`: a small runtime for libretifs' async client.
+/// The library crash and trouble reports go to (retifs ADR-0036).
+pub const CRASH_LIBRARY: &str = "retifs-crashlogs";
+
 pub struct Daemon {
     rt: tokio::runtime::Runtime,
     store: PathBuf,
@@ -171,6 +174,52 @@ impl Daemon {
 
     pub(crate) fn client(&self) -> Result<Client, String> {
         self.rt.block_on(Client::connect(&self.store)).map_err(|e| e.to_string())
+    }
+
+    /// The Reticulum paths to library `ns`'s nodes, as this node's Reticulum
+    /// client sees them (any implementation: retifs ADR-0003's transport trait).
+    pub fn paths(&self, ns: &str) -> Result<Vec<libretifs::PathInfo>, String> {
+        let mut c = self.client()?;
+        match self.request(&mut c, Request::NsPaths { ns: ns.into() })? {
+            Response::Paths { paths } => Ok(paths),
+            _ => Err("unexpected answer".into()),
+        }
+    }
+
+    /// The crash library's reports, newest first (see `api::crash_reports`).
+    pub fn crash_reports(&self) -> Result<serde_json::Value, String> {
+        let mut c = self.client()?;
+        let records = match self.request(&mut c, Request::Query { ns: CRASH_LIBRARY.into(), terms: vec!["has:kind".into()], at: None })? {
+            Response::Records { records } => records,
+            _ => return Err("unexpected answer".into()),
+        };
+        let mut out: Vec<(i64, serde_json::Value)> = records
+            .iter()
+            .map(|r| {
+                let text = |k: &str| r.attrs.iter().find_map(|(key, v)| match v {
+                    AttrValue::Str(s) if key == k => Some(s.clone()),
+                    _ => None,
+                });
+                let mtime = r.attrs.iter().find_map(|(k, v)| match v {
+                    AttrValue::Int(t) if k == "mtime" => Some(*t),
+                    _ => None,
+                });
+                let j = serde_json::json!({
+                    "path": text("path"), "kind": text("kind"), "device": text("device"),
+                    "source": text("source"), "version": text("version"), "mtime": mtime,
+                });
+                (mtime.unwrap_or(0), j)
+            })
+            .collect();
+        out.sort_by(|a, b| b.0.cmp(&a.0));
+        Ok(serde_json::Value::Array(out.into_iter().map(|(_, j)| j).collect()))
+    }
+
+    /// A crash or trouble report (retifs ADR-0036), kept by retifsd for the
+    /// user's crash library.
+    pub fn crash_report(&self, kind: &str, source: &str, text: &str) -> Result<(), String> {
+        let mut c = self.client()?;
+        self.request(&mut c, Request::CrashReport { kind: kind.into(), source: source.into(), text: text.into() }).map(|_| ())
     }
 
     /// Asks retifsd to stop cleanly, closing its store (as SIGTERM does).

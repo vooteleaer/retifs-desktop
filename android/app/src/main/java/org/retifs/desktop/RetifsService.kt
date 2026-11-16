@@ -103,12 +103,6 @@ class RetifsService : Service() {
         return f
     }
 
-    private fun prnsApp(): Boolean = try {
-        packageManager.getPackageInfo(PRNS_APP, 0)
-        true
-    } catch (e: Exception) {
-        false
-    }
 
     /** Starts what's missing, every few seconds, and says how it is. */
     private fun supervise() {
@@ -149,8 +143,7 @@ class RetifsService : Service() {
                 waitingForReticulum = !up
                 when {
                     up -> update()
-                    prnsApp() -> update("waiting for Reticulum")
-                    else -> update("no Reticulum: start a Reticulum app with a shared instance")
+                    else -> update("waiting for Reticulum")
                 }
                 wake.tryAcquire(if (retifsd?.isAlive == true) 15_000L else 3_000L, java.util.concurrent.TimeUnit.MILLISECONDS)
                 wake.drainPermits()
@@ -272,7 +265,6 @@ class RetifsService : Service() {
         const val NOTIFICATION = 1
         /** Raised when phoneDefaults() gains a setting, so existing installs get it. */
         const val PHONE_DEFAULTS = 2
-        const val PRNS_APP = "org.personal.hopspot"
         const val ACTION_STOP = "org.retifs.desktop.STOP"
         const val ACTION_RESTART = "org.retifs.desktop.RESTART"
 

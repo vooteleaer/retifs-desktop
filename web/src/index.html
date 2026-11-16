@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>retifs</title>
+<style>
+:root {
+  --bg: #f6f6f7; --panel: #ffffff; --side: #ececef; --fg: #1f1f23; --dim: #6b6b74;
+  --line: #d9d9de; --accent: #5b4bc4; --accent-fg: #ffffff; --bad: #b3261e; --good: #2e7d32;
+  --hover: rgba(0,0,0,.05); --sel: rgba(91,75,196,.14);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #18181b; --panel: #222226; --side: #1d1d21; --fg: #e8e8ec; --dim: #9a9aa3;
+    --line: #34343a; --accent: #b3a8ff; --accent-fg: #18181b; --bad: #f2b8b5; --good: #8bd48f;
+    --hover: rgba(255,255,255,.06); --sel: rgba(179,168,255,.16);
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--fg); }
+header { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
+header h1 { font-size: 18px; margin: 0; font-weight: 600; }
+header .state { color: var(--dim); font-size: 13px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; background: var(--dim); }
+.dot.up { background: var(--good); } .dot.down { background: var(--bad); }
+main { display: flex; min-height: calc(100vh - 49px); }
+nav { width: 280px; flex: none; background: var(--side); border-right: 1px solid var(--line); padding: 8px; overflow-y: auto; }
+nav h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); margin: 14px 8px 6px; display: flex; justify-content: space-between; align-items: center; }
+nav .item { display: flex; align-items: center; gap: 6px; padding: 7px 10px; border-radius: 8px; cursor: pointer; }
+nav .item:hover { background: var(--hover); }
+nav .item.sel { background: var(--sel); }
+nav .item .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+nav .item .meta { color: var(--dim); font-size: 12px; }
+.star { color: var(--accent); }
+section#view { flex: 1; padding: 18px 24px; overflow-y: auto; min-width: 0; }
+section#view h2 { margin: 0 0 4px; font-size: 22px; }
+.sub { color: var(--dim); margin: 0 0 14px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 16px; margin: 0 0 14px; }
+.card h3 { margin: 0 0 8px; font-size: 15px; }
+.row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 6px 0; }
+.row .grow { flex: 1; min-width: 0; }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 3px 16px; }
+.kv .k { color: var(--dim); }
+button, select, input, textarea { font: inherit; color: inherit; }
+button { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 5px 12px; cursor: pointer; }
+button:hover { background: var(--hover); }
+button.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+button.danger { color: var(--bad); }
+button.flat { border-color: transparent; background: transparent; color: var(--accent); }
+input, select, textarea { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 5px 8px; }
+input.wide, textarea { width: 100%; }
+textarea { min-height: 6em; }
+pre { white-space: pre-wrap; word-break: break-word; font: 12.5px/1.4 ui-monospace, Menlo, Consolas, monospace; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px; max-height: 70vh; overflow: auto; }
+.mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px; word-break: break-all; }
+.dim { color: var(--dim); }
+.bad { color: var(--bad); }
+.list > div { padding: 7px 0; border-top: 1px solid var(--line); }
+.list > div:first-child { border-top: 0; }
+.bar { height: 5px; background: var(--line); border-radius: 3px; overflow: hidden; }
+.bar > div { height: 100%; background: var(--accent); }
+#toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--fg); color: var(--bg); padding: 8px 16px; border-radius: 8px; display: none; max-width: 90vw; }
+@media (max-width: 760px) {
+  main { flex-direction: column; }
+  nav { width: auto; border-right: 0; border-bottom: 1px solid var(--line); max-height: 40vh; }
+  section#view { padding: 14px 16px; }
+}
+</style>
+</head>
+<body>
+<header><span class="dot" id="dot"></span><h1>retifs</h1><span class="state" id="state">…</span></header>
+<main>
+  <nav id="nav"></nav>
+  <section id="view"><p class="dim">Loading…</p></section>
+</main>
+<div id="toast"></div>
+<script src="/app.js"></script>
+</body>
+</html>

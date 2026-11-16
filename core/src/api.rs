@@ -72,6 +72,25 @@ pub fn recovery_restore(text: &str) -> Result<Value, String> {
     Ok(json!({ "libraries": libraries }))
 }
 
+/// A crash or trouble report to retifsd (retifs ADR-0036).
+pub fn crash_report(kind: &str, source: &str, text: &str) -> Result<(), String> {
+    Daemon::new().crash_report(kind, source, text)
+}
+
+/// The crash library's reports (retifs ADR-0036), newest first:
+/// `[{"path", "kind", "device", "source", "version", "mtime"}]`, or `{"error"}`
+/// (no such library here: this node hasn't joined it).
+pub fn crash_reports() -> Value {
+    Daemon::new().crash_reports().unwrap_or_else(|e| json!({ "error": e }))
+}
+
+/// One report's text, by its path in the crash library.
+pub fn crash_text(path: &str) -> Result<String, String> {
+    let mut out = Vec::new();
+    Daemon::new().read_file(crate::CRASH_LIBRARY, path, &mut out)?;
+    Ok(String::from_utf8_lossy(&out).into_owned())
+}
+
 pub fn leave(ns: &str) -> Result<(), String> {
     Daemon::new().leave(ns)
 }
@@ -112,6 +131,32 @@ pub fn keep(ns: &str, all: bool) -> Result<(), String> {
 /// A library's members (see `Daemon::members`).
 pub fn members(ns: &str) -> Value {
     Daemon::new().members(ns).unwrap_or_else(|e| json!({ "error": e }))
+}
+
+/// The Reticulum paths to a library's nodes: `[{"node", "name", "writer",
+/// "hops" (null: no path), "rtt_ms", "rate_bps", "slow", "last_heard_ms",
+/// "linked"}]`, members first, each named as in `members`; or `{"error"}`.
+pub fn paths(ns: &str) -> Value {
+    let d = Daemon::new();
+    let paths = match d.paths(ns) {
+        Ok(p) => p,
+        Err(e) => return json!({ "error": e }),
+    };
+    let members = d.members(ns).unwrap_or(json!([]));
+    let name_of = |writer: &str| -> Option<String> {
+        members.as_array()?.iter().find(|m| m["writer"] == writer).map(|m| {
+            let n = m["name"].as_str().unwrap_or("");
+            if n.is_empty() { format!("~{}", m["words"].as_str().unwrap_or("")) } else { n.to_string() }
+        })
+    };
+    json!(paths
+        .iter()
+        .map(|p| {
+            let mut j = json!(p);
+            j["name"] = p.writer.as_deref().and_then(name_of).into();
+            j
+        })
+        .collect::<Vec<_>>())
 }
 
 /// An invitation's link: `role` "read", "write" or "invite", for `days`.

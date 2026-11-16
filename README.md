@@ -1,6 +1,6 @@
 # retifs-desktop
 
-A desktop management utility for [retifs](https://github.com/vooteleaer/retifs), in the spirit of the Nextcloud desktop client: a tray icon and a window to see and manage what retifs holds, where, and who shares it. Native widgets on each platform over a shared Rust core on `libretifs`: GTK 4 / libadwaita on Linux (`gtk/`), Win32 on Windows (`windows/`), BeAPI on Haiku (`haiku/`), and Compose on Android (`android/`, where the app also runs `retifsd`).
+A desktop management utility for [retifs](https://github.com/vooteleaer/retifs), in the spirit of the Nextcloud desktop client: a tray icon and a window to see and manage what retifs holds, where, and who shares it. Native widgets on each platform over a shared Rust core on `libretifs`: GTK 4 / libadwaita on Linux (`gtk/`), Win32 on Windows (`windows/`), BeAPI on Haiku (`haiku/`), Compose on Android (`android/`, where the app also runs `retifsd`), and a web page for nodes without a screen (`web/`, `retifs-web`: a NAS or a container; reachable only from the networks its installer allows, optionally only by browsers paired with a link from its log, retifs ADR-0037).
 
 > A demo app of [retifs](https://github.com/vooteleaer/retifs), part of its test release. To try it, start with [getting started](https://github.com/vooteleaer/retifs/blob/main/docs/getting-started.md).
 

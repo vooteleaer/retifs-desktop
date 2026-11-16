@@ -93,6 +93,11 @@ object Core {
     /** A connection to retifsd as the app with `token`, past its Hello: a descriptor, or -1. */
     external fun appConnect(token: String): Int
 
+    /** Where the core writes its own panics (a folder, and the header each report starts with). */
+    external fun crashDir(dir: String, header: String)
+    /** A crash or trouble report to retifs (`kind`, from `source`): true once it took it. */
+    external fun crashReport(kind: String, source: String, text: String): Boolean
+
     /** Where everything lives for this app. */
     class Paths(context: Context) {
         val home: File = context.filesDir
@@ -112,5 +117,6 @@ object Core {
         p.logs.mkdirs()
         init(p.home.absolutePath, p.store.absolutePath)
         ready = true
+        CrashReports.install(context, ::crashDir, ::crashReport)
     }
 }

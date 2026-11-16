@@ -103,7 +103,7 @@ pub fn parse_status(json: &str) -> Result<Reticulum, String> {
 }
 
 /// What's said when no shared instance answers.
-pub const NO_SHARED_INSTANCE: &str = "no Reticulum shared instance is running (start Prns, rnsd or another Reticulum)";
+pub const NO_SHARED_INSTANCE: &str = "no Reticulum shared instance is running (start Reticulum on this device)";
 
 /// Set once connections were changed in the configuration file with no
 /// way to apply them live: the shared instance must be restarted.
@@ -689,7 +689,7 @@ pub fn supervise() -> Vec<String> {
         std::thread::sleep(std::time::Duration::from_millis(500));
     }
     if !shared_instance_up() {
-        did.push("no Reticulum yet: start Prns (or another shared instance)".to_string());
+        did.push("no Reticulum yet: start Reticulum on this device (any with a shared instance)".to_string());
     } else if !running("retifsd.exe") {
         match service("retifsd", "start") {
             Ok(()) => did.push("started retifsd".to_string()),

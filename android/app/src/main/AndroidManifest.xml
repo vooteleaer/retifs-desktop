@@ -16,10 +16,6 @@
     <uses-permission android:name="android.permission.READ_SYNC_SETTINGS" />
     <uses-permission android:name="android.permission.WRITE_SYNC_SETTINGS" />
 
-    <!-- Prns's Android app: where it's installed, it is the phone's Reticulum. -->
-    <queries>
-        <package android:name="org.personal.hopspot" />
-    </queries>
 
     <application
         android:allowBackup="false"
